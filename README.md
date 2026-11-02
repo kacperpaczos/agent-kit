@@ -1,13 +1,30 @@
 # agent-kit
 
-Reusable Rust crate that detects installed AI-agent CLIs on a machine:
-which binaries exist, their versions, and whether they are logged in.
-Currently it knows **Claude Code**, **Codex**, and **OpenCode** (plus
-fallback binary names such as `openclaude` and `opencode-cli`).
+The workspace contains two crates:
 
-SkillCraft uses this crate to drive its "work on a skill with an agent"
-feature; the crate itself has no SkillCraft dependency and can be embedded
-in any app that needs to find agent CLIs.
+- **`agent-detect`** — which agent CLIs are installed on a machine, their
+  versions, and whether they are logged in. Currently it knows **Claude
+  Code**, **Codex**, and **OpenCode** (plus fallback binary names such as
+  `openclaude` and `opencode-cli`).
+- **`agent-run`** — give a detected agent one task and stream its output
+  as normalized events, with a cooperative `Stop` flag.
+
+The crates have no host-app dependency and can be embedded in any app.
+
+## Install
+
+Add the crates as git dependencies in `Cargo.toml`:
+
+```toml
+agent-detect = { git = "https://github.com/kacperpaczos/agent-kit" }
+agent-run = { git = "https://github.com/kacperpaczos/agent-kit" }
+```
+
+`FakeHost` (used in tests) requires the `test-support` feature:
+`agent-detect = { git = "https://github.com/kacperpaczos/agent-kit", features = ["test-support"] }`.
+
+Tested with Claude Code 2.1.316, Codex CLI 0.165.0, and OpenCode 2.1.4
+(Linux).
 
 ## Detection states
 
