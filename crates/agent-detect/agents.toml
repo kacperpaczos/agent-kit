@@ -1,0 +1,51 @@
+# Engine-agent definitions, in default-engine preference order (spec §6.1).
+
+[[agent]]
+id = "claude"
+name = "Claude Code"
+bin = "claude"
+fallback_bins = ["openclaude"]
+bin_env = "CLAUDE_BIN"
+config_dirs = ["$CLAUDE_CONFIG_DIR || ~/.claude"]
+version_args = ["--version"]
+auth_probe = ["auth", "status"]
+transport = "claude-stream-json"
+fallback_models = ["default", "sonnet", "opus", "haiku"]
+
+[agent.sessions]
+path = "~/.claude.json"
+parser = "claude-json"
+
+[[agent]]
+id = "opencode"
+name = "OpenCode"
+bin = "opencode"
+fallback_bins = ["opencode-cli"]
+bin_env = "OPENCODE_BIN"
+config_dirs = ["$XDG_CONFIG_HOME/opencode || ~/.config/opencode"]
+version_args = ["--version"]
+transport = "opencode-run-json"
+fallback_models = ["default"]
+
+[agent.models]
+args = ["models", "--verbose"]
+parser = "opencode-models"
+
+[agent.sessions]
+path = "$XDG_DATA_HOME/opencode/opencode.db || ~/.local/share/opencode/opencode.db"
+parser = "opencode-sqlite"
+
+[[agent]]
+id = "codex"
+name = "Codex"
+bin = "codex"
+fallback_bins = []
+bin_env = "CODEX_BIN"
+config_dirs = ["$CODEX_HOME || ~/.codex"]
+version_args = ["--version"]
+transport = "codex-exec-json"
+fallback_models = ["default"]
+
+[agent.sessions]
+path = "$CODEX_HOME/sessions || ~/.codex/sessions"
+parser = "codex-jsonl"

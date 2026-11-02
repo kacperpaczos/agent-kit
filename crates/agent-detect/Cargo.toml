@@ -1,0 +1,21 @@
+[package]
+name = "agent-detect"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "Detection of installed AI-agent CLIs (Claude Code, Codex, OpenCode): binaries, versions, login state"
+repository = "https://github.com/kacperpaczos/agent-kit"
+
+[features]
+test-support = ["dep:tempfile"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+regex = "1"
+libc = "0.2"
+tempfile = { version = "3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
