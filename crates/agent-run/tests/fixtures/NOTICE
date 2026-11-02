@@ -1,0 +1,10 @@
+Fixtures in this directory come from the OpenDesign project
+(https://github.com/kacperpaczos/OpenDesign-For-GNU-Linux), used under the
+Apache License, Version 2.0.
+
+- claude/claude-2.1.259-*.jsonl — copied from
+  apps/daemon/tests/fixtures/claude-cli-recordings/
+- codex/turn-exec-json.jsonl — copied from
+  apps/daemon/tests/fixtures/codex-app-server/turn-exec-json.jsonl
+- opencode/synthetic-turn.jsonl — synthetic, hand-written from the event shapes
+  in apps/daemon/src/runtimes/json-event-stream.ts; not a recording of a real run.

@@ -1,0 +1,5 @@
+{"type":"step_start","sessionID":"ses_synthetic_0001","part":{}}
+{"type":"text","sessionID":"ses_synthetic_0001","part":{"text":"Poprawiłem opis skilla."}}
+{"type":"tool_use","sessionID":"ses_synthetic_0001","part":{"tool":"write","callID":"call_1","state":{"status":"completed","input":{"filePath":"/w/SKILL.md","content":"# demo"}}}}
+{"type":"tool_use","sessionID":"ses_synthetic_0001","part":{"tool":"bash","callID":"call_2","state":{"status":"completed","input":{"command":"ls"}}}}
+{"type":"step_finish","sessionID":"ses_synthetic_0001","part":{"finishReason":"stop","tokens":{"input":10,"output":5}}}
