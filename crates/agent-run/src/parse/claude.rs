@@ -1,6 +1,6 @@
 //! Line parser for Claude Code's `--output-format stream-json --verbose`
 //! JSONL stream, modeled on OpenDesign's `claude-stream.ts` but reduced to
-//! SkillCraft's single event vocabulary. Every line maps to zero or more
+//! the crate's single event vocabulary. Every line maps to zero or more
 //! `AgentEvent`s; lines that carry nothing the UI needs (hook chatter,
 //! thinking blocks, tool results, rate-limit events) map to nothing.
 

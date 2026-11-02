@@ -164,7 +164,7 @@ fn native_host_run_reads_large_output() {
 fn native_host_run_maps_spawn_errors() {
     assert_eq!(
         NativeHost.run(
-            Path::new("/nonexistent-skillcraft-bin"),
+            Path::new("/nonexistent-agent-bin"),
             &[],
             &path_env(),
             Duration::from_secs(1)
