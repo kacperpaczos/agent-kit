@@ -100,11 +100,21 @@ pub fn terminal_launch(
         launch.mode = Some(mode);
     }
     match &terminal.context {
+        // The context is free text: it must never be read as an option
+        // (a context of "--help" or a permission flag). Long flags take it
+        // glued (`--flag=text`); the positional form goes after `--`.
         ContextDef::SystemPromptFlag { flag } | ContextDef::PromptFlag { flag } => {
-            launch.args.push(flag.clone());
+            if flag.starts_with("--") {
+                launch.args.push(format!("{flag}={context}"));
+            } else {
+                launch.args.push(flag.clone());
+                launch.args.push(context.to_string());
+            }
+        }
+        ContextDef::FirstArg => {
+            launch.args.push("--".to_string());
             launch.args.push(context.to_string());
         }
-        ContextDef::FirstArg => launch.args.push(context.to_string()),
         ContextDef::None => {}
     }
     launch

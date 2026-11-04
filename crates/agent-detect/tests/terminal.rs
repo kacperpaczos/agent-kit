@@ -85,8 +85,7 @@ fn claude_launch_per_mode() {
                 args: strings(&[
                     "--permission-mode",
                     value,
-                    "--append-system-prompt",
-                    "the context",
+                    "--append-system-prompt=the context",
                 ]),
                 cwd: PathBuf::from("/work/dir"),
                 mode: Some(mode),
@@ -108,6 +107,7 @@ fn codex_launch_per_mode_has_cwd_flag_and_context_last() {
     for (mode, mode_args) in expected {
         let mut args = strings(&["-C", "/work/dir"]);
         args.extend(strings(&mode_args));
+        args.push("--".into());
         args.push("the context".into());
         let got = launch("codex", mode);
         assert_eq!(
@@ -127,7 +127,7 @@ fn codex_launch_per_mode_has_cwd_flag_and_context_last() {
 fn opencode_launch_supported_and_unsupported_modes() {
     assert_eq!(
         launch("opencode", ApprovalMode::Auto).args,
-        strings(&["--auto", "--prompt", "the context"])
+        strings(&["--auto", "--prompt=the context"])
     );
     assert_eq!(
         launch("opencode", ApprovalMode::Auto).mode,
@@ -135,7 +135,7 @@ fn opencode_launch_supported_and_unsupported_modes() {
     );
     assert_eq!(
         launch("opencode", ApprovalMode::Ask).args,
-        strings(&["--prompt", "the context"])
+        strings(&["--prompt=the context"])
     );
     assert_eq!(
         launch("opencode", ApprovalMode::Ask).mode,
@@ -143,7 +143,7 @@ fn opencode_launch_supported_and_unsupported_modes() {
     );
     // Plan is not offered by the TUI: plain launch, no mode args.
     let plan = launch("opencode", ApprovalMode::Plan);
-    assert_eq!(plan.args, strings(&["--prompt", "the context"]));
+    assert_eq!(plan.args, strings(&["--prompt=the context"]));
     assert_eq!(plan.mode, None);
 }
 
@@ -238,10 +238,10 @@ plan = ["--read-only"]
     );
     assert_eq!(
         terminal_launch(agent, "mine", Path::new("/w"), "ctx", ApprovalMode::Plan).args,
-        strings(&["tui", "--dir", "/w", "--read-only", "ctx"])
+        strings(&["tui", "--dir", "/w", "--read-only", "--", "ctx"])
     );
     let auto = terminal_launch(agent, "mine", Path::new("/w"), "ctx", ApprovalMode::Auto);
-    assert_eq!(auto.args, strings(&["tui", "--dir", "/w", "ctx"]));
+    assert_eq!(auto.args, strings(&["tui", "--dir", "/w", "--", "ctx"]));
     assert_eq!(auto.mode, None);
 }
 
@@ -302,4 +302,32 @@ yolo = ["--x"]
     )
     .expect_err("unknown mode must fail");
     assert!(!err.is_empty());
+}
+
+/// A context that looks like an option stays one argument the agent reads
+/// as text: glued to long flags, after `--` when positional.
+#[test]
+fn hyphen_context_is_never_an_option() {
+    let cwd = std::path::Path::new("/work/dir");
+    let ctx = "--dangerously-skip-permissions";
+    for id in ["claude", "opencode"] {
+        let got = agent_detect::terminal::terminal_launch(
+            builtin(id),
+            "/opt/bin/agent",
+            cwd,
+            ctx,
+            ApprovalMode::Ask,
+        );
+        assert!(!got.args.iter().any(|a| a == ctx), "{id}: {:?}", got.args);
+        assert!(got.args.last().unwrap().ends_with(ctx), "{id}");
+    }
+    let codex = agent_detect::terminal::terminal_launch(
+        builtin("codex"),
+        "/opt/bin/agent",
+        cwd,
+        ctx,
+        ApprovalMode::Ask,
+    );
+    let n = codex.args.len();
+    assert_eq!(&codex.args[n - 2..], &["--".to_string(), ctx.to_string()]);
 }
