@@ -2,6 +2,8 @@
 
 use std::sync::LazyLock;
 
+use crate::terminal::TerminalDef;
+
 /// The bundled agent list, parsed once from `agents.toml` next to this
 /// crate's `Cargo.toml`. A parse failure is a bug caught by tests, so
 /// failing here panics.
@@ -45,6 +47,9 @@ pub struct AgentDef {
     #[serde(default)]
     pub fallback_models: Vec<String>,
     pub sessions: Option<SessionsDef>,
+    /// Interactive terminal launch recipe; `None` = plain binary fallback.
+    #[serde(default)]
+    pub terminal: Option<TerminalDef>,
 }
 
 /// Command listing an agent's models, plus its output parser name.

@@ -66,6 +66,42 @@ Each `[[agent]]` table names the binary (and fallbacks), the config
 directories (path templates like `$CLAUDE_CONFIG_DIR || ~/.claude`), the
 version command, an optional auth probe, and a transport name.
 
+## Terminal recipes
+
+An app with an embedded terminal can open an agent interactively in a
+working directory, with a context text and an approval mode (`Auto`,
+`Ask`, `Plan`), without hard-coding any agent's flags. Each agent may carry
+an optional `[agent.terminal]` table:
+
+```toml
+[agent.terminal]
+args = []                 # fixed leading args (optional)
+cwd_flag = "-C"           # optional; without it only the process cwd is set
+context = { kind = "first_arg" }  # or system_prompt_flag / prompt_flag (with `flag`), or none
+
+[agent.terminal.modes]    # extra args per supported mode; a missing mode is unsupported
+auto = ["-a", "never", "-s", "workspace-write"]
+plan = ["-a", "on-request", "-s", "read-only"]
+```
+
+```rust
+use agent_detect::terminal::{ApprovalMode, context_in_argv, supported_modes, terminal_launch};
+
+let launch = terminal_launch(agent, &bin, &workdir, "Context for the session", ApprovalMode::Ask);
+// spawn launch.program with launch.args in launch.cwd (argv only, no shell);
+// launch.mode is None when the agent does not support the requested mode.
+if !context_in_argv(agent) {
+    // type the context as the first message once the agent is up
+}
+```
+
+argv is built as: recipe `args`, then `cwd_flag <cwd>`, then the mode's
+args, then the context (`[flag, context]` for the flag kinds; a bare
+`context` last for `first_arg`). An agent without a terminal table starts
+as its plain binary with no arguments. The bundled recipes never use
+permission-bypass flags; in this list Claude Code and Codex support all
+three modes and OpenCode supports `Auto` and `Ask`.
+
 
 ## Running a turn: `agent-run`
 

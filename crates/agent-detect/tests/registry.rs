@@ -1,6 +1,13 @@
 //! Tests for `[[agent]]` parsing and the builtin agent list.
 
+use std::collections::BTreeMap;
+
 use agent_detect::registry::{AgentDef, ModelsDef, SessionsDef, builtin_agents, parse_agents};
+use agent_detect::terminal::{ApprovalMode, ContextDef, TerminalDef};
+
+fn strings(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
 
 fn claude_agent() -> AgentDef {
     AgentDef {
@@ -24,6 +31,21 @@ fn claude_agent() -> AgentDef {
         sessions: Some(SessionsDef {
             path: "~/.claude.json".into(),
             parser: "claude-json".into(),
+        }),
+        terminal: Some(TerminalDef {
+            args: vec![],
+            cwd_flag: None,
+            context: ContextDef::SystemPromptFlag {
+                flag: "--append-system-prompt".into(),
+            },
+            modes: BTreeMap::from([
+                (
+                    ApprovalMode::Auto,
+                    strings(&["--permission-mode", "acceptEdits"]),
+                ),
+                (ApprovalMode::Ask, strings(&["--permission-mode", "manual"])),
+                (ApprovalMode::Plan, strings(&["--permission-mode", "plan"])),
+            ]),
         }),
     }
 }
@@ -50,6 +72,17 @@ fn opencode_agent() -> AgentDef {
                 .into(),
             parser: "opencode-sqlite".into(),
         }),
+        terminal: Some(TerminalDef {
+            args: vec![],
+            cwd_flag: None,
+            context: ContextDef::PromptFlag {
+                flag: "--prompt".into(),
+            },
+            modes: BTreeMap::from([
+                (ApprovalMode::Auto, strings(&["--auto"])),
+                (ApprovalMode::Ask, vec![]),
+            ]),
+        }),
     }
 }
 
@@ -70,6 +103,25 @@ fn codex_agent() -> AgentDef {
         sessions: Some(SessionsDef {
             path: "$CODEX_HOME/sessions || ~/.codex/sessions".into(),
             parser: "codex-jsonl".into(),
+        }),
+        terminal: Some(TerminalDef {
+            args: vec![],
+            cwd_flag: Some("-C".into()),
+            context: ContextDef::FirstArg,
+            modes: BTreeMap::from([
+                (
+                    ApprovalMode::Auto,
+                    strings(&["-a", "never", "-s", "workspace-write"]),
+                ),
+                (
+                    ApprovalMode::Ask,
+                    strings(&["-a", "on-request", "-s", "workspace-write"]),
+                ),
+                (
+                    ApprovalMode::Plan,
+                    strings(&["-a", "on-request", "-s", "read-only"]),
+                ),
+            ]),
         }),
     }
 }
@@ -102,6 +154,7 @@ transport = "mine-transport"
     assert_eq!(agents[0].fallback_models, Vec::<String>::new());
     assert_eq!(agents[0].models, None);
     assert_eq!(agents[0].sessions, None);
+    assert_eq!(agents[0].terminal, None);
 }
 
 #[test]

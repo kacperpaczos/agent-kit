@@ -16,6 +16,15 @@ fallback_models = ["default", "sonnet", "opus", "haiku"]
 path = "~/.claude.json"
 parser = "claude-json"
 
+# Interactive launch (flags checked against `claude --help`).
+[agent.terminal]
+context = { kind = "system_prompt_flag", flag = "--append-system-prompt" }
+
+[agent.terminal.modes]
+auto = ["--permission-mode", "acceptEdits"]
+ask = ["--permission-mode", "manual"]
+plan = ["--permission-mode", "plan"]
+
 [[agent]]
 id = "opencode"
 name = "OpenCode"
@@ -35,6 +44,15 @@ parser = "opencode-models"
 path = "$XDG_DATA_HOME/opencode/opencode.db || ~/.local/share/opencode/opencode.db"
 parser = "opencode-sqlite"
 
+# Interactive TUI launch (flags checked against `opencode --help`); the TUI
+# has no plan/read-only flag, so `plan` is unsupported.
+[agent.terminal]
+context = { kind = "prompt_flag", flag = "--prompt" }
+
+[agent.terminal.modes]
+auto = ["--auto"]
+ask = []
+
 [[agent]]
 id = "codex"
 name = "Codex"
@@ -49,3 +67,13 @@ fallback_models = ["default"]
 [agent.sessions]
 path = "$CODEX_HOME/sessions || ~/.codex/sessions"
 parser = "codex-jsonl"
+
+# Interactive TUI launch (flags checked against `codex --help`).
+[agent.terminal]
+cwd_flag = "-C"
+context = { kind = "first_arg" }
+
+[agent.terminal.modes]
+auto = ["-a", "never", "-s", "workspace-write"]
+ask = ["-a", "on-request", "-s", "workspace-write"]
+plan = ["-a", "on-request", "-s", "read-only"]

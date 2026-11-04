@@ -5,3 +5,4 @@ pub mod host;
 pub mod paths;
 pub mod registry;
 pub mod status;
+pub mod terminal;
