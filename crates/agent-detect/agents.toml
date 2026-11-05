@@ -68,10 +68,12 @@ fallback_models = ["default"]
 path = "$CODEX_HOME/sessions || ~/.codex/sessions"
 parser = "codex-jsonl"
 
-# Interactive TUI launch (flags checked against `codex --help`).
+# Interactive TUI launch (flags checked against `codex --help`). The context
+# becomes developer instructions via a `-c` config override, not the first
+# user message.
 [agent.terminal]
 cwd_flag = "-C"
-context = { kind = "first_arg" }
+context = { kind = "config_flag", flag = "-c", key = "developer_instructions" }
 
 [agent.terminal.modes]
 auto = ["-a", "never", "-s", "workspace-write"]

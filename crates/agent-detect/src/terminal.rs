@@ -32,6 +32,10 @@ pub enum ContextDef {
     SystemPromptFlag { flag: String },
     /// `[flag, context]`, used as the first user prompt.
     PromptFlag { flag: String },
+    /// `[flag, "key=<context as a TOML basic string>"]`: the context sets a
+    /// config key through a TOML override flag (e.g. Codex's
+    /// `-c developer_instructions="..."`).
+    ConfigFlag { flag: String, key: String },
     /// `[context]` as the last positional argument.
     FirstArg,
     /// The context is not passed in argv; the host types it in.
@@ -111,6 +115,13 @@ pub fn terminal_launch(
                 launch.args.push(context.to_string());
             }
         }
+        // The value is one quoted TOML string, so it cannot be an option.
+        ContextDef::ConfigFlag { flag, key } => {
+            launch.args.push(flag.clone());
+            launch
+                .args
+                .push(format!("{key}={}", toml_basic_string(context)));
+        }
         ContextDef::FirstArg => {
             launch.args.push("--".to_string());
             launch.args.push(context.to_string());
@@ -118,6 +129,26 @@ pub fn terminal_launch(
         ContextDef::None => {}
     }
     launch
+}
+
+/// Render `text` as a single-line TOML basic string (`"..."`) that parses
+/// back to exactly `text`.
+fn toml_basic_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Whether [`terminal_launch`] puts the context in argv. When `false`, the

@@ -59,6 +59,14 @@ fn every_builtin_terminal_table_is_valid() {
             ContextDef::SystemPromptFlag { flag } | ContextDef::PromptFlag { flag } => {
                 assert!(flag.starts_with('-'), "{}: bad context flag", agent.id)
             }
+            ContextDef::ConfigFlag { flag, key } => {
+                assert!(flag.starts_with('-'), "{}: bad config flag", agent.id);
+                assert!(
+                    !key.is_empty() && !key.starts_with('-'),
+                    "{}: bad config key",
+                    agent.id
+                );
+            }
             ContextDef::FirstArg | ContextDef::None => {}
         }
         if let Some(flag) = &terminal.cwd_flag {
@@ -95,7 +103,7 @@ fn claude_launch_per_mode() {
 }
 
 #[test]
-fn codex_launch_per_mode_has_cwd_flag_and_context_last() {
+fn codex_launch_per_mode_passes_context_as_developer_instructions() {
     let expected = [
         (ApprovalMode::Auto, ["-a", "never", "-s", "workspace-write"]),
         (
@@ -107,8 +115,8 @@ fn codex_launch_per_mode_has_cwd_flag_and_context_last() {
     for (mode, mode_args) in expected {
         let mut args = strings(&["-C", "/work/dir"]);
         args.extend(strings(&mode_args));
-        args.push("--".into());
-        args.push("the context".into());
+        args.push("-c".into());
+        args.push(r#"developer_instructions="the context""#.into());
         let got = launch("codex", mode);
         assert_eq!(
             got,
@@ -119,7 +127,7 @@ fn codex_launch_per_mode_has_cwd_flag_and_context_last() {
                 mode: Some(mode),
             }
         );
-        assert_eq!(got.args.last().map(String::as_str), Some("the context"));
+        assert!(!got.args.iter().any(|a| a == "--"), "{:?}", got.args);
     }
 }
 
@@ -328,6 +336,89 @@ fn hyphen_context_is_never_an_option() {
         ctx,
         ApprovalMode::Ask,
     );
+    assert!(!codex.args.iter().any(|a| a == ctx), "{:?}", codex.args);
     let n = codex.args.len();
-    assert_eq!(&codex.args[n - 2..], &["--".to_string(), ctx.to_string()]);
+    assert_eq!(codex.args[n - 2], "-c");
+    assert_eq!(
+        codex.args[n - 1],
+        format!("developer_instructions=\"{ctx}\"")
+    );
+}
+
+/// Parse a rendered `key=value` assignment the way Codex parses `-c`.
+fn parse_assignment(assignment: &str, key: &str) -> String {
+    let table: toml::Table = toml::from_str(assignment)
+        .unwrap_or_else(|e| panic!("assignment {assignment:?} is not TOML: {e}"));
+    assert_eq!(table.len(), 1, "{assignment:?}");
+    table
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("no string {key} in {assignment:?}"))
+        .to_string()
+}
+
+#[test]
+fn config_flag_context_round_trips_through_toml() {
+    let tricky = [
+        "the context",
+        "",
+        "say \"hi\"",
+        r"C:\path\to\file \n not a newline",
+        "line one\nline two\n\nline four\n",
+        "\nleading newline",
+        "triple \"\"\" quotes \"\"\"",
+        "''' literal ''' quotes '",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-c model=evil",
+        "tabs\tand \u{7f} control \u{1} chars\r\n",
+        "unicode: zażółć gęślą jaźń, 日本語, emoji \u{1F600}",
+        "key = \"value\"\n[table]\nx = 1",
+    ];
+    for ctx in tricky {
+        let got = terminal_launch(
+            builtin("codex"),
+            "codex",
+            Path::new("/w"),
+            ctx,
+            ApprovalMode::Ask,
+        );
+        let n = got.args.len();
+        assert_eq!(got.args[n - 2], "-c", "{ctx:?}");
+        let assignment = &got.args[n - 1];
+        assert!(
+            assignment.starts_with("developer_instructions="),
+            "{assignment:?}"
+        );
+        assert_eq!(
+            parse_assignment(assignment, "developer_instructions"),
+            ctx,
+            "{assignment:?}"
+        );
+    }
+}
+
+#[test]
+fn custom_config_flag_recipe_parses_and_launches() {
+    let agents = custom_agents(
+        r#"
+[agent.terminal]
+context = { kind = "config_flag", flag = "--config", key = "instructions" }
+modes = { ask = [] }
+"#,
+    );
+    let agent = &agents[0];
+    assert_eq!(
+        agent.terminal.as_ref().expect("terminal").context,
+        ContextDef::ConfigFlag {
+            flag: "--config".into(),
+            key: "instructions".into()
+        }
+    );
+    assert!(context_in_argv(agent));
+    let got = terminal_launch(agent, "mine", Path::new("/w"), "a \"b\"", ApprovalMode::Ask);
+    assert_eq!(
+        got.args,
+        strings(&["--config", r#"instructions="a \"b\"""#])
+    );
+    assert_eq!(got.mode, Some(ApprovalMode::Ask));
 }

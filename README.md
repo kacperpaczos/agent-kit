@@ -77,7 +77,8 @@ an optional `[agent.terminal]` table:
 [agent.terminal]
 args = []                 # fixed leading args (optional)
 cwd_flag = "-C"           # optional; without it only the process cwd is set
-context = { kind = "first_arg" }  # or system_prompt_flag / prompt_flag (with `flag`), or none
+context = { kind = "config_flag", flag = "-c", key = "developer_instructions" }
+# or first_arg, system_prompt_flag / prompt_flag (with `flag`), or none
 
 [agent.terminal.modes]    # extra args per supported mode; a missing mode is unsupported
 auto = ["-a", "never", "-s", "workspace-write"]
@@ -96,8 +97,9 @@ if !context_in_argv(agent) {
 ```
 
 argv is built as: recipe `args`, then `cwd_flag <cwd>`, then the mode's
-args, then the context (`[flag, context]` for the flag kinds; a bare
-`context` last for `first_arg`). An agent without a terminal table starts
+args, then the context (`[flag, context]` for the flag kinds;
+`[flag, key="<context as a TOML string>"]` for `config_flag`; `-- context`
+last for `first_arg`). An agent without a terminal table starts
 as its plain binary with no arguments. The bundled recipes never use
 permission-bypass flags; in this list Claude Code and Codex support all
 three modes and OpenCode supports `Auto` and `Ask`.

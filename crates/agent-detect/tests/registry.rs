@@ -107,7 +107,10 @@ fn codex_agent() -> AgentDef {
         terminal: Some(TerminalDef {
             args: vec![],
             cwd_flag: Some("-C".into()),
-            context: ContextDef::FirstArg,
+            context: ContextDef::ConfigFlag {
+                flag: "-c".into(),
+                key: "developer_instructions".into(),
+            },
             modes: BTreeMap::from([
                 (
                     ApprovalMode::Auto,
