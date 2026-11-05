@@ -17,7 +17,7 @@ use std::time::Duration;
 
 pub use parse::{parse_add_json, parse_check, parse_find, parse_list_json};
 
-use crate::runner::{Command, CommandRunner, Output};
+use crate::runner::{CancelToken, Command, CommandRunner, Output, RunError};
 use crate::types::{
     AgentSelection, Capabilities, ChannelId, InstallRequest, InstalledSkill, Marketplace,
     MarketplaceError, Outcome, RemoveRequest, Result, Scope, SearchResults, SourceKind, UpdateInfo,
@@ -158,6 +158,8 @@ pub fn plan_install(req: &InstallRequest) -> Result<Plan> {
 }
 
 /// `remove <name>... [-g] -y [--agent <agent>...]`, or `remove --skill *`.
+/// [`AgentSelection::All`] omits `--agent`: upstream rejects `--agent '*'`
+/// for remove and already targets every known agent without the flag.
 pub fn plan_remove(req: &RemoveRequest) -> Result<Plan> {
     if req.skills.is_empty() {
         return Err(MarketplaceError::Invalid(
@@ -173,7 +175,10 @@ pub fn plan_remove(req: &RemoveRequest) -> Result<Plan> {
     if !all {
         req.skills.iter().try_for_each(|s| check(Kind::Name, s))?;
     }
-    let agents = agent_args(&req.agents)?;
+    let agents = match req.agents {
+        AgentSelection::All => vec![],
+        ref other => agent_args(other)?,
+    };
     let mut plan = Plan::new("remove", Some(&req.scope));
     if all {
         plan.extend(["--skill", "*"]);
@@ -254,6 +259,7 @@ pub struct NpxSkills<R> {
     runner: R,
     program: String,
     prefix: Vec<String>,
+    cancel: CancelToken,
 }
 
 impl<R: CommandRunner> NpxSkills<R> {
@@ -270,7 +276,16 @@ impl<R: CommandRunner> NpxSkills<R> {
             runner,
             program: program.to_string(),
             prefix: prefix.iter().map(|s| s.to_string()).collect(),
+            cancel: CancelToken::new(),
         }
+    }
+
+    /// Every command this adapter runs shares `cancel`; setting it stops
+    /// the running command and fails later ones with
+    /// [`MarketplaceError::Cancelled`].
+    pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
+        self.cancel = cancel;
+        self
     }
 
     fn run(&self, plan: Plan, timeout: Duration) -> Result<Output> {
@@ -282,8 +297,12 @@ impl<R: CommandRunner> NpxSkills<R> {
             cwd: plan.cwd,
             env: vec![],
             timeout,
+            cancel: self.cancel.clone(),
         };
-        self.runner.run(&cmd).map_err(MarketplaceError::Run)
+        self.runner.run(&cmd).map_err(|e| match e {
+            RunError::Cancelled => MarketplaceError::Cancelled,
+            other => MarketplaceError::Run(other.to_string()),
+        })
     }
 
     /// Run and require exit code 0.
@@ -294,6 +313,42 @@ impl<R: CommandRunner> NpxSkills<R> {
         } else {
             Err(failed(&output))
         }
+    }
+}
+
+/// Names whose installation vanished or whose agents changed between two
+/// listings, in `before` order.
+fn listing_changes(before: &[InstalledSkill], after: &[InstalledSkill]) -> Vec<String> {
+    before
+        .iter()
+        .filter(|old| {
+            match after
+                .iter()
+                .find(|new| new.name.eq_ignore_ascii_case(&old.name) && new.path == old.path)
+            {
+                None => true,
+                Some(new) => {
+                    let mut a = old.agents.clone();
+                    let mut b = new.agents.clone();
+                    a.sort();
+                    b.sort();
+                    a != b
+                }
+            }
+        })
+        .map(|old| old.name.clone())
+        .collect()
+}
+
+fn exit_warning(command: &str, output: &Output) -> String {
+    let code = output
+        .status
+        .map_or_else(|| "a signal".to_string(), |c| format!("code {c}"));
+    let stderr = output.stderr.trim();
+    if stderr.is_empty() {
+        format!("`skills {command}` exited with {code}")
+    } else {
+        format!("`skills {command}` exited with {code}: {stderr}")
     }
 }
 
@@ -340,59 +395,88 @@ impl<R: CommandRunner> Marketplace for NpxSkills<R> {
         }
         let mut infos: Vec<Option<UpdateInfo>> = vec![None; installed.len()];
         for (scope, indices) in groups {
-            let names: Vec<String> = indices.iter().map(|&i| installed[i].name.clone()).collect();
+            let group: Vec<InstalledSkill> =
+                indices.iter().map(|&i| installed[i].clone()).collect();
+            let names: Vec<String> = group.iter().map(|s| s.name.clone()).collect();
             let output = self.run(plan_check(scope, &names)?, CHECK_TIMEOUT)?;
-            for (&i, info) in indices.iter().zip(parse_check(&output, &names)) {
+            for (&i, info) in indices.iter().zip(parse_check(&output, &group)) {
                 infos[i] = Some(info);
             }
         }
         Ok(infos.into_iter().flatten().collect())
     }
 
+    /// Changed skills come only from `add --json`; other output confirms
+    /// nothing. A non-zero exit with confirmed installs keeps them.
     fn install(&self, req: &InstallRequest) -> Result<Outcome> {
         let output = self.run(plan_install(req)?, MUTATE_TIMEOUT)?;
         match parse_add_json(&output.stdout) {
-            Some(outcome) if output.success() || !outcome.changed.is_empty() => Ok(outcome),
-            Some(_) | None if !output.success() => Err(failed(&output)),
-            _ => {
-                let mut changed = req.skills.clone();
-                if changed.is_empty() {
-                    changed.extend(req.source.skill.clone());
-                }
-                Ok(Outcome {
-                    changed,
-                    warnings: vec![
-                        "unrecognised `skills add` output; assuming the requested skills were installed"
-                            .to_string(),
-                    ],
-                })
+            Some(outcome) if output.success() => Ok(outcome),
+            Some(mut outcome) if !outcome.changed.is_empty() => {
+                outcome.warnings.push(exit_warning("add", &output));
+                Ok(outcome)
             }
+            None if output.success() => Ok(Outcome {
+                changed: vec![],
+                warnings: vec![
+                    "unrecognised `skills add` output; installed skills not confirmed".to_string(),
+                ],
+            }),
+            _ => Err(failed(&output)),
         }
     }
 
+    /// Removed skills are confirmed by comparing `list --json` before and
+    /// after (upstream exits 0 even when no name matched).
     fn remove(&self, req: &RemoveRequest) -> Result<Outcome> {
-        self.run_ok(plan_remove(req)?, MUTATE_TIMEOUT)?;
-        Ok(Outcome {
-            changed: req.skills.clone(),
-            warnings: vec![],
-        })
+        let plan = plan_remove(req)?;
+        let before = self.list(&req.scope);
+        let output = self.run(plan, MUTATE_TIMEOUT)?;
+        let changes = match &before {
+            Ok(before) => self
+                .list(&req.scope)
+                .map(|after| listing_changes(before, &after)),
+            Err(e) => Err(e.clone()),
+        };
+        match changes {
+            Ok(changed) if !changed.is_empty() => {
+                let warnings = if output.success() {
+                    vec![]
+                } else {
+                    vec![exit_warning("remove", &output)]
+                };
+                Ok(Outcome { changed, warnings })
+            }
+            _ if !output.success() => Err(failed(&output)),
+            Ok(_) => Ok(Outcome {
+                changed: vec![],
+                warnings: vec!["`skills remove` changed no installed skill".to_string()],
+            }),
+            Err(e) => Ok(Outcome {
+                changed: vec![],
+                warnings: vec![format!("removal not confirmed: listing failed ({e})")],
+            }),
+        }
     }
 
+    /// Updated skills come from `✓ Updated <name>` lines only.
     fn update(&self, req: &UpdateRequest) -> Result<Outcome> {
-        let output = self.run_ok(plan_update(req)?, MUTATE_TIMEOUT)?;
+        let output = self.run(plan_update(req)?, MUTATE_TIMEOUT)?;
         let changed = parse::parse_updated(&output.stdout);
-        if changed.is_empty() && !req.skills.is_empty() {
+        if !output.success() {
+            if changed.is_empty() {
+                return Err(failed(&output));
+            }
             return Ok(Outcome {
-                changed: req.skills.clone(),
-                warnings: vec![
-                    "no per-skill result in `skills update` output; reporting the requested skills"
-                        .to_string(),
-                ],
+                changed,
+                warnings: vec![exit_warning("update", &output)],
             });
         }
-        Ok(Outcome {
-            changed,
-            warnings: vec![],
-        })
+        let warnings = if changed.is_empty() && !parse::reports_nothing_to_update(&output.stdout) {
+            vec!["unrecognised `skills update` output; updated skills not confirmed".to_string()]
+        } else {
+            vec![]
+        };
+        Ok(Outcome { changed, warnings })
     }
 }

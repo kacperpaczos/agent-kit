@@ -190,16 +190,21 @@ fn parse_count(text: &str) -> Option<u64> {
     (value >= 0.0).then(|| (value * scale).round() as u64)
 }
 
-/// Read `skills check` output (src/update.ts, check mode) for `names`, in
-/// order. `↑ <name> has an update` is an update; names listed under
-/// "cannot be checked automatically" are unknown. Exit 1 without any
-/// update line, any other non-zero exit, or a source that failed to check
-/// leaves the unlisted names unknown too.
-pub fn parse_check(output: &Output, names: &[String]) -> Vec<UpdateInfo> {
+/// Read `skills check` output (src/update.ts, check mode) for `installed`,
+/// in order. Availability is `None` unless the output establishes it:
+/// - `↑ <name> has an update` is `Some(true)`;
+/// - names under "cannot be checked automatically" / "cannot be updated
+///   automatically" stay unknown, as do untracked skills (no lock source)
+///   and local-path sources, which upstream never compares;
+/// - other tracked skills are `Some(false)` only when the comparison is
+///   shown to have run: an `All … skills are up to date` line, or update
+///   lines with exit 1, and no `✗` failure line.
+pub fn parse_check(output: &Output, installed: &[InstalledSkill]) -> Vec<UpdateInfo> {
     let lines = plain_lines(&output.stdout);
     let mut updates = HashSet::new();
     let mut unknown = HashSet::new();
     let mut failed = false;
+    let mut all_current = false;
     let mut in_skipped = false;
     for line in &lines {
         let line = line.trim();
@@ -208,37 +213,57 @@ pub fn parse_check(output: &Output, names: &[String]) -> Vec<UpdateInfo> {
             .and_then(|l| l.strip_suffix(" has an update"))
         {
             updates.insert(name.to_lowercase());
-        } else if line.contains("cannot be checked automatically") {
+        } else if line.contains("cannot be checked automatically")
+            || line.contains("cannot be updated automatically")
+        {
             in_skipped = true;
         } else if in_skipped && let Some(item) = line.strip_prefix("• ") {
             let names = item.split(" (").next().unwrap_or(item);
             unknown.extend(names.split(", ").map(|n| n.trim().to_lowercase()));
         } else if line.starts_with("✗ ") {
             failed = true;
+        } else if line.starts_with("✓ All ") && line.ends_with(" skills are up to date") {
+            all_current = true;
         } else if line.is_empty() {
             in_skipped = false;
         }
     }
-    let completed = output.status == Some(0) || (output.status == Some(1) && !updates.is_empty());
-    names
+    let compared = match output.status {
+        Some(0) => all_current || !updates.is_empty(),
+        Some(1) => !updates.is_empty(),
+        _ => false,
+    };
+    installed
         .iter()
-        .map(|name| {
-            let key = name.to_lowercase();
-            let available = if !completed || unknown.contains(&key) {
-                None
-            } else if updates.contains(&key) {
+        .map(|skill| {
+            let key = skill.name.to_lowercase();
+            let checkable = matches!(
+                &skill.source,
+                Some(source) if !matches!(source.kind, SourceKind::Local { .. })
+            );
+            let available = if matches!(output.status, Some(0 | 1)) && updates.contains(&key) {
                 Some(true)
-            } else if failed {
-                None
-            } else {
+            } else if compared && !failed && checkable && !unknown.contains(&key) {
                 Some(false)
+            } else {
+                None
             };
             UpdateInfo {
-                name: name.clone(),
+                name: skill.name.clone(),
                 available,
             }
         })
         .collect()
+}
+
+/// True when `skills update` output says there was nothing to update.
+pub(crate) fn reports_nothing_to_update(stdout: &str) -> bool {
+    plain_lines(stdout).iter().any(|line| {
+        let line = line.trim();
+        line.ends_with("up to date")
+            || (line.starts_with("No ")
+                && (line.ends_with(" to update.") || line.ends_with(" to check.")))
+    })
 }
 
 /// Names from `✓ Updated <name>` lines of `skills update` (not the

@@ -10,8 +10,9 @@ use agent_marketplace::npx_skills::{
     parse_list_json, plan_check, plan_install, plan_list, plan_remove, plan_search, plan_update,
 };
 use agent_marketplace::{
-    AgentSelection, ChannelId, Command, CommandRunner, InstallRequest, InstalledSkill, Marketplace,
-    MarketplaceError, Output, RemoveRequest, Scope, SourceKind, SourceRef, UpdateRequest,
+    AgentSelection, CancelToken, ChannelId, Command, CommandRunner, InstallRequest, InstalledSkill,
+    Marketplace, MarketplaceError, Output, RemoveRequest, RunError, Scope, SourceKind, SourceRef,
+    UpdateRequest,
 };
 
 const LIST_GLOBAL: &str = include_str!("fixtures/list_global.json");
@@ -25,11 +26,11 @@ const ADD_JSON: &str = include_str!("fixtures/add_json.json");
 #[derive(Default)]
 struct FakeRunner {
     calls: RefCell<Vec<Command>>,
-    outputs: RefCell<VecDeque<Result<Output, String>>>,
+    outputs: RefCell<VecDeque<Result<Output, RunError>>>,
 }
 
 impl FakeRunner {
-    fn with(outputs: Vec<Result<Output, String>>) -> FakeRunner {
+    fn with(outputs: Vec<Result<Output, RunError>>) -> FakeRunner {
         FakeRunner {
             calls: RefCell::default(),
             outputs: RefCell::new(outputs.into()),
@@ -41,7 +42,7 @@ impl FakeRunner {
 }
 
 impl CommandRunner for &FakeRunner {
-    fn run(&self, cmd: &Command) -> Result<Output, String> {
+    fn run(&self, cmd: &Command) -> Result<Output, RunError> {
         self.calls.borrow_mut().push(cmd.clone());
         self.outputs
             .borrow_mut()
@@ -50,7 +51,7 @@ impl CommandRunner for &FakeRunner {
     }
 }
 
-fn out(status: i32, stdout: &str) -> Result<Output, String> {
+fn out(status: i32, stdout: &str) -> Result<Output, RunError> {
     Ok(Output {
         status: Some(status),
         stdout: stdout.to_string(),
@@ -64,6 +65,62 @@ fn args(list: &[&str]) -> Vec<String> {
 
 fn project() -> PathBuf {
     PathBuf::from("/work/proj")
+}
+
+/// A skill the lock file tracks (it has a GitHub source).
+fn tracked(name: &str, scope: Scope) -> InstalledSkill {
+    InstalledSkill {
+        source: Some(SourceRef::github("acme", "tools", Some(name))),
+        ..installed(name, scope)
+    }
+}
+
+/// A tracked skill installed from a local path (upstream never checks it).
+fn local(name: &str, scope: Scope) -> InstalledSkill {
+    InstalledSkill {
+        source: Some(SourceRef {
+            kind: SourceKind::Local {
+                path: PathBuf::from("/src").join(name),
+            },
+            skill: Some(name.to_string()),
+        }),
+        ..installed(name, scope)
+    }
+}
+
+fn status(output: &str, code: i32) -> Output {
+    Output {
+        status: Some(code),
+        stdout: output.to_string(),
+        stderr: String::new(),
+    }
+}
+
+fn availability(infos: &[agent_marketplace::UpdateInfo]) -> Vec<(&str, Option<bool>)> {
+    infos
+        .iter()
+        .map(|i| (i.name.as_str(), i.available))
+        .collect()
+}
+
+/// `list --json` output with `(name, agent display names)` rows.
+fn list_json(rows: &[(&str, &[&str])]) -> Result<Output, RunError> {
+    let rows: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(name, agents)| {
+            serde_json::json!({
+                "name": name,
+                "path": format!("/home/u/.agents/skills/{name}"),
+                "scope": "global",
+                "agents": agents,
+                "source": "acme/tools",
+                "sourceUrl": "https://github.com/acme/tools.git",
+                "sourceType": "github",
+                "status": "tracked"
+            })
+        })
+        .collect();
+    out(0, &serde_json::Value::Array(rows).to_string())
 }
 
 fn installed(name: &str, scope: Scope) -> InstalledSkill {
@@ -318,11 +375,10 @@ fn remove_puts_names_before_greedy_agent_flag() {
         scope: Scope::Project(project()),
         agents: AgentSelection::All,
     };
+    // Upstream remove rejects `--agent '*'`; omitting --agent targets every
+    // known agent already.
     let plan = plan_remove(&all).unwrap();
-    assert_eq!(
-        plan.args,
-        args(&["remove", "--skill", "*", "-y", "--agent", "*"])
-    );
+    assert_eq!(plan.args, args(&["remove", "--skill", "*", "-y"]));
     assert_eq!(plan.cwd, Some(project()));
 }
 
@@ -468,53 +524,68 @@ fn find_no_results_and_unrecognised_output() {
 
 #[test]
 fn check_output_marks_updates_unknowns_and_current() {
-    let names = args(&["Frontend-Design", "my-local", "pdf"]);
-    let infos = parse_check(
-        &Output {
-            status: Some(1),
-            stdout: CHECK_UPDATES.to_string(),
-            stderr: String::new(),
-        },
-        &names,
-    );
-    let got: Vec<(&str, Option<bool>)> = infos
-        .iter()
-        .map(|i| (i.name.as_str(), i.available))
-        .collect();
+    let skills = [
+        tracked("Frontend-Design", Scope::Global),
+        local("my-local", Scope::Global),
+        tracked("pdf", Scope::Global),
+        installed("hand-made", Scope::Global),
+    ];
+    let infos = parse_check(&status(CHECK_UPDATES, 1), &skills);
     assert_eq!(
-        got,
+        availability(&infos),
         [
             ("Frontend-Design", Some(true)),
             ("my-local", None),
-            ("pdf", Some(false))
+            // The comparison ran and reported updates: unlisted tracked = current.
+            ("pdf", Some(false)),
+            // Untracked skills are never checked upstream.
+            ("hand-made", None),
         ]
     );
 }
 
 #[test]
-fn check_exit_codes() {
-    let names = args(&["a", "b"]);
-    let ok = parse_check(
-        &Output {
-            status: Some(0),
-            stdout: CHECK_UPTODATE.to_string(),
-            stderr: String::new(),
-        },
-        &names,
-    );
-    assert!(ok.iter().all(|i| i.available == Some(false)));
-    // Exit 1 without any "has an update" line is a failure, not an update.
-    let failed = parse_check(
-        &Output {
-            status: Some(1),
-            stdout: "✗ Failed to check skills from acme/tools\n".to_string(),
-            stderr: String::new(),
-        },
-        &names,
-    );
-    assert!(failed.iter().all(|i| i.available.is_none()));
-    let killed = parse_check(&Output::default(), &names);
+fn check_is_unknown_without_positive_evidence() {
+    let skills = [tracked("a", Scope::Global), installed("b", Scope::Global)];
+    let ok = parse_check(&status(CHECK_UPTODATE, 0), &skills);
+    assert_eq!(availability(&ok), [("a", Some(false)), ("b", None)]);
+    for (stdout, code) in [
+        ("", 0),
+        ("Something new happened\n", 0),
+        ("No global skills to check.\n", 0),
+        ("3 project skill(s) already up to date\n", 0),
+        // Exit 1 without any "has an update" line is a failure, not an update.
+        ("✗ Failed to check skills from acme/tools\n", 1),
+    ] {
+        let infos = parse_check(&status(stdout, code), &skills);
+        assert!(infos.iter().all(|i| i.available.is_none()), "{stdout:?}");
+    }
+    let killed = parse_check(&Output::default(), &skills);
     assert!(killed.iter().all(|i| i.available.is_none()));
+    // A source that failed to check makes unlisted skills unknown.
+    let partial = parse_check(
+        &status("↑ a has an update\n✗ Failed to check skills from x/y\n", 1),
+        &[tracked("a", Scope::Global), tracked("c", Scope::Global)],
+    );
+    assert_eq!(availability(&partial), [("a", Some(true)), ("c", None)]);
+}
+
+#[test]
+fn check_recognises_project_skills_that_cannot_be_updated() {
+    let proj = Scope::Project(project());
+    let stdout = "Checking for skill updates…\n\nChecking 1 skill(s)…\n\n\
+        ✓ All project skills are up to date\n\n\
+        1 project skill(s) cannot be updated automatically (installed before skillPath tracking):\n  \
+        • old-one\n    \
+        To refresh: npx skills add acme/tools -y\n\n";
+    let infos = parse_check(
+        &status(stdout, 0),
+        &[tracked("fresh", proj.clone()), tracked("old-one", proj)],
+    );
+    assert_eq!(
+        availability(&infos),
+        [("fresh", Some(false)), ("old-one", None)]
+    );
 }
 
 #[test]
@@ -551,7 +622,10 @@ fn adapter_runs_npx_yes_skills_with_planned_argv() {
 
 #[test]
 fn adapter_search_and_spawn_failure() {
-    let runner = FakeRunner::with(vec![out(0, FIND_HITS), Err("npx: not found".to_string())]);
+    let runner = FakeRunner::with(vec![
+        out(0, FIND_HITS),
+        Err(RunError::Spawn("npx: not found".to_string())),
+    ]);
     let npx = NpxSkills::new(&runner);
     assert_eq!(npx.search("design").unwrap().hits.len(), 4);
     assert!(matches!(
@@ -582,17 +656,13 @@ fn adapter_check_groups_by_scope_and_keeps_input_order() {
     let runner = FakeRunner::with(vec![out(1, CHECK_UPDATES), out(0, CHECK_UPTODATE)]);
     let npx = NpxSkills::new(&runner);
     let list = [
-        installed("frontend-design", Scope::Global),
-        installed("local-one", Scope::Project(project())),
-        installed("my-local", Scope::Global),
+        tracked("frontend-design", Scope::Global),
+        tracked("local-one", Scope::Project(project())),
+        local("my-local", Scope::Global),
     ];
     let infos = npx.check(&list).unwrap();
-    let got: Vec<(&str, Option<bool>)> = infos
-        .iter()
-        .map(|i| (i.name.as_str(), i.available))
-        .collect();
     assert_eq!(
-        got,
+        availability(&infos),
         [
             ("frontend-design", Some(true)),
             ("local-one", Some(false)),
@@ -619,7 +689,7 @@ fn adapter_check_groups_by_scope_and_keeps_input_order() {
 }
 
 #[test]
-fn adapter_install_parses_json_and_falls_back_on_text() {
+fn adapter_install_reports_only_confirmed_skills() {
     let req = InstallRequest {
         source: SourceRef::github("vercel-labs", "agent-skills", None),
         skills: args(&["frontend-design", "skill-creator", "old-one"]),
@@ -634,16 +704,21 @@ fn adapter_install_parses_json_and_falls_back_on_text() {
             stdout: String::new(),
             stderr: "boom".to_string(),
         }),
+        out(1, r#"[{"name":"x","status":"failed","error":"nope"}]"#),
     ]);
     let npx = NpxSkills::new(&runner);
+    // Partial success: kept, with the failures and the exit code as warnings.
     let outcome = npx.install(&req).unwrap();
     assert_eq!(outcome.changed, args(&["frontend-design"]));
+    assert_eq!(outcome.warnings.len(), 3);
+    // Exit 0 without JSON: nothing confirmed.
     let fallback = npx.install(&req).unwrap();
-    assert_eq!(
-        fallback.changed,
-        args(&["frontend-design", "skill-creator", "old-one"])
-    );
+    assert!(fallback.changed.is_empty());
     assert_eq!(fallback.warnings.len(), 1);
+    assert!(matches!(
+        npx.install(&req),
+        Err(MarketplaceError::Failed { .. })
+    ));
     assert!(matches!(
         npx.install(&req),
         Err(MarketplaceError::Failed { .. })
@@ -663,43 +738,158 @@ fn adapter_invalid_request_never_runs() {
     assert!(runner.calls().is_empty());
 }
 
-#[test]
-fn adapter_remove_and_update_report_requested_names() {
-    let runner = FakeRunner::with(vec![out(0, "Removed\n"), out(0, "Updated\n")]);
-    let npx = NpxSkills::new(&runner);
-    let removed = npx
-        .remove(&RemoveRequest {
-            skills: args(&["a"]),
-            scope: Scope::Global,
-            agents: AgentSelection::Detected,
-        })
-        .unwrap();
-    assert_eq!(removed.changed, args(&["a"]));
-    let updated = npx
-        .update(&UpdateRequest {
-            skills: args(&["b"]),
-            scope: Scope::Global,
-        })
-        .unwrap();
-    assert_eq!(updated.changed, args(&["b"]));
+fn remove_req(skills: &[&str], agents: AgentSelection) -> RemoveRequest {
+    RemoveRequest {
+        skills: args(skills),
+        scope: Scope::Global,
+        agents,
+    }
 }
 
 #[test]
-fn custom_command_prefix() {
+fn adapter_remove_confirms_changes_with_list_before_and_after() {
+    let runner = FakeRunner::with(vec![
+        list_json(&[("a", &["Claude Code"]), ("b", &["Codex"])]),
+        out(0, "Successfully removed 1 skill(s)\n"),
+        list_json(&[("b", &["Codex"])]),
+    ]);
+    let npx = NpxSkills::new(&runner);
+    let outcome = npx
+        .remove(&remove_req(&["A"], AgentSelection::Detected))
+        .unwrap();
+    assert_eq!(outcome.changed, args(&["a"]));
+    assert!(outcome.warnings.is_empty());
+    let calls: Vec<Vec<String>> = runner.calls().into_iter().map(|c| c.args).collect();
+    assert_eq!(
+        calls,
+        [
+            args(&["--yes", "skills", "list", "-g", "--json"]),
+            args(&["--yes", "skills", "remove", "A", "-g", "-y"]),
+            args(&["--yes", "skills", "list", "-g", "--json"]),
+        ]
+    );
+}
+
+#[test]
+fn adapter_remove_of_unmatched_name_changes_nothing() {
+    let runner = FakeRunner::with(vec![
+        list_json(&[("b", &["Codex"])]),
+        out(0, "No skills found to remove.\n"),
+        list_json(&[("b", &["Codex"])]),
+    ]);
+    let npx = NpxSkills::new(&runner);
+    let outcome = npx
+        .remove(&remove_req(&["zzz"], AgentSelection::Detected))
+        .unwrap();
+    assert!(outcome.changed.is_empty());
+    assert_eq!(outcome.warnings.len(), 1);
+}
+
+#[test]
+fn adapter_remove_from_one_agent_and_everything() {
+    let runner = FakeRunner::with(vec![
+        list_json(&[("a", &["Claude Code", "Codex"])]),
+        out(0, ""),
+        list_json(&[("a", &["Codex"])]),
+        list_json(&[("a", &["Codex"]), ("b", &["Codex"])]),
+        out(0, ""),
+        list_json(&[]),
+    ]);
+    let npx = NpxSkills::new(&runner);
+    let one = npx
+        .remove(&remove_req(&["a"], AgentSelection::Only(args(&["claude"]))))
+        .unwrap();
+    assert_eq!(one.changed, args(&["a"]));
+    let all = npx
+        .remove(&remove_req(&["*"], AgentSelection::All))
+        .unwrap();
+    assert_eq!(all.changed, args(&["a", "b"]));
+}
+
+#[test]
+fn adapter_remove_keeps_partial_success_and_fails_without_any() {
+    let failed = || {
+        Ok(Output {
+            status: Some(1),
+            stdout: String::new(),
+            stderr: "Failed to remove 1 skill(s)".to_string(),
+        })
+    };
+    let runner = FakeRunner::with(vec![
+        list_json(&[("a", &[]), ("b", &[])]),
+        failed(),
+        list_json(&[("b", &[])]),
+        list_json(&[("b", &[])]),
+        failed(),
+        list_json(&[("b", &[])]),
+    ]);
+    let npx = NpxSkills::new(&runner);
+    let partial = npx
+        .remove(&remove_req(&["a", "b"], AgentSelection::Detected))
+        .unwrap();
+    assert_eq!(partial.changed, args(&["a"]));
+    assert_eq!(partial.warnings.len(), 1);
+    assert!(matches!(
+        npx.remove(&remove_req(&["b"], AgentSelection::Detected)),
+        Err(MarketplaceError::Failed { .. })
+    ));
+}
+
+#[test]
+fn adapter_remove_without_a_listing_confirms_nothing() {
+    let runner = FakeRunner::with(vec![
+        Ok(Output {
+            status: Some(1),
+            stdout: String::new(),
+            stderr: "broken lock".to_string(),
+        }),
+        out(0, "Successfully removed 1 skill(s)\n"),
+    ]);
+    let npx = NpxSkills::new(&runner);
+    let outcome = npx
+        .remove(&remove_req(&["a"], AgentSelection::Detected))
+        .unwrap();
+    assert!(outcome.changed.is_empty());
+    assert_eq!(outcome.warnings.len(), 1);
+    assert_eq!(runner.calls().len(), 2);
+}
+
+#[test]
+fn custom_command_prefix_and_cancel_token() {
     let runner = FakeRunner::with(vec![out(0, "[]")]);
-    let npx = NpxSkills::with_command(&runner, "/opt/bin/skills", &[]);
+    let token = CancelToken::new();
+    let npx = NpxSkills::with_command(&runner, "/opt/bin/skills", &[]).with_cancel(token.clone());
     npx.list(&Scope::Global).unwrap();
-    assert_eq!(runner.calls()[0].program, "/opt/bin/skills");
-    assert_eq!(runner.calls()[0].args, args(&["list", "-g", "--json"]));
+    let call = &runner.calls()[0];
+    assert_eq!(call.program, "/opt/bin/skills");
+    assert_eq!(call.args, args(&["list", "-g", "--json"]));
+    token.cancel();
+    assert!(
+        call.cancel.is_cancelled(),
+        "the command shares the adapter's token"
+    );
     let _ = npx_skills::AGENT_NAMES;
 }
 
 #[test]
-fn adapter_update_reads_per_skill_lines() {
+fn adapter_cancelled_run_is_reported() {
+    let runner = FakeRunner::with(vec![Err(RunError::Cancelled)]);
+    let npx = NpxSkills::new(&runner);
+    assert!(matches!(
+        npx.list(&Scope::Global),
+        Err(MarketplaceError::Cancelled)
+    ));
+}
+
+#[test]
+fn adapter_update_reports_only_confirmed_skills() {
     let stdout = "\x1b[38;5;145mUpdating a, b…\x1b[0m\n\n  \x1b[38;5;145m✓\x1b[0m Updated a\n\n\x1b[38;5;145m✓ Updated 1 skill(s)\x1b[0m\n";
     let runner = FakeRunner::with(vec![
         out(0, stdout),
         out(0, "✓ All global skills are up to date\n"),
+        out(0, "Updated\n"),
+        out(1, "  ✓ Updated a\nFailed to update 1 skill(s)\n"),
+        out(1, "Failed to update 1 skill(s)\n"),
     ]);
     let npx = NpxSkills::new(&runner);
     let req = UpdateRequest {
@@ -709,11 +899,20 @@ fn adapter_update_reads_per_skill_lines() {
     let outcome = npx.update(&req).unwrap();
     assert_eq!(outcome.changed, args(&["a"]));
     assert!(outcome.warnings.is_empty());
-    let all = npx
-        .update(&UpdateRequest {
-            skills: vec![],
-            scope: Scope::Global,
-        })
-        .unwrap();
-    assert!(all.changed.is_empty());
+    // Already current: nothing changed, nothing to warn about.
+    let current = npx.update(&req).unwrap();
+    assert!(current.changed.is_empty());
+    assert!(current.warnings.is_empty());
+    // Unrecognised output: nothing confirmed.
+    let unknown = npx.update(&req).unwrap();
+    assert!(unknown.changed.is_empty());
+    assert_eq!(unknown.warnings.len(), 1);
+    // Partial success kept.
+    let partial = npx.update(&req).unwrap();
+    assert_eq!(partial.changed, args(&["a"]));
+    assert_eq!(partial.warnings.len(), 1);
+    assert!(matches!(
+        npx.update(&req),
+        Err(MarketplaceError::Failed { .. })
+    ));
 }

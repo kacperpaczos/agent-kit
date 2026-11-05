@@ -12,5 +12,5 @@ pub mod space;
 pub mod types;
 mod validate;
 
-pub use runner::{Command, CommandRunner, Output, ProcessRunner};
+pub use runner::{CancelToken, Command, CommandRunner, Output, ProcessRunner, RunError};
 pub use types::*;

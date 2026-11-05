@@ -188,6 +188,8 @@ pub enum MarketplaceError {
     Unsupported(String),
     /// The command could not be run (not found, timeout, I/O).
     Run(String),
+    /// The caller cancelled the command.
+    Cancelled,
     /// The command succeeded but its output was not understood.
     Parse(String),
     /// The command ran and failed.
@@ -201,6 +203,7 @@ impl fmt::Display for MarketplaceError {
             MarketplaceError::Unsupported(msg) => write!(f, "unsupported: {msg}"),
             MarketplaceError::Run(msg) => write!(f, "could not run command: {msg}"),
             MarketplaceError::Parse(msg) => write!(f, "{msg}"),
+            MarketplaceError::Cancelled => f.write_str("cancelled"),
             MarketplaceError::Failed { status, stderr } => match status {
                 Some(code) => write!(f, "command failed with exit code {code}: {stderr}"),
                 None => write!(f, "command was killed: {stderr}"),
