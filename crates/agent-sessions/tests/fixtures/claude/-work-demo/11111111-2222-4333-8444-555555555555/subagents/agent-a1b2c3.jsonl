@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"11111111-2222-4333-8444-555555555555","uuid":"s1","parentUuid":null,"cwd":"/work/demo","timestamp":"2026-01-02T10:01:00.000Z","isSidechain":true,"message":{"role":"user","content":"Explore the repo"}}
+{"type":"assistant","sessionId":"11111111-2222-4333-8444-555555555555","uuid":"s2","parentUuid":"s1","cwd":"/work/demo","timestamp":"2026-01-02T10:01:30.000Z","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"Found 3 crates."}]}}

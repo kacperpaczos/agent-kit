@@ -16,6 +16,11 @@ fallback_models = ["default", "sonnet", "opus", "haiku"]
 path = "~/.claude.json"
 parser = "claude-json"
 
+# Conversation transcripts: <path>/<cwd-slug>/<uuid>.jsonl.
+[agent.transcripts]
+path = "$CLAUDE_CONFIG_DIR/projects || ~/.claude/projects"
+format = "claude-jsonl"
+
 # Interactive launch (flags checked against `claude --help`).
 [agent.terminal]
 context = { kind = "system_prompt_flag", flag = "--append-system-prompt" }
@@ -48,6 +53,11 @@ parser = "opencode-models"
 path = "$XDG_DATA_HOME/opencode/opencode.db || ~/.local/share/opencode/opencode.db"
 parser = "opencode-sqlite"
 
+# Conversation transcripts: tables session_v2 / session_message.
+[agent.transcripts]
+path = "$XDG_DATA_HOME/opencode/opencode.db || ~/.local/share/opencode/opencode.db"
+format = "opencode-sqlite"
+
 # Interactive TUI launch (flags checked against `opencode --help`); the TUI
 # has no plan/read-only flag, so `plan` is unsupported.
 [agent.terminal]
@@ -71,6 +81,11 @@ fallback_models = ["default"]
 [agent.sessions]
 path = "$CODEX_HOME/sessions || ~/.codex/sessions"
 parser = "codex-jsonl"
+
+# Conversation transcripts: <path>/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl.
+[agent.transcripts]
+path = "$CODEX_HOME/sessions || ~/.codex/sessions"
+format = "codex-rollout"
 
 # Interactive TUI launch (flags checked against `codex --help`). The context
 # becomes developer instructions via a `-c` config override, not the first

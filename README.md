@@ -1,6 +1,6 @@
 # agent-kit
 
-The workspace contains three crates:
+The workspace contains four crates:
 
 - **`agent-detect`** — which agent CLIs are installed on a machine, their
   versions, and whether they are logged in. Currently it knows **Claude
@@ -14,6 +14,10 @@ The workspace contains three crates:
   an injectable `CommandRunner`; read-only provenance readers for each
   channel's own records; and one space that shows each skill once with all
   its installations and whether copies diverge.
+- **`agent-sessions`** — read-only transcript readers (Claude Code JSONL,
+  Codex rollouts, OpenCode SQLite behind the default `opencode` feature):
+  cheap session listing, normalized events with size caps, skill
+  activations (certain or inferred), and `redact` for obvious secrets.
 
 The crates have no host-app dependency and can be embedded in any app.
 

@@ -50,6 +50,7 @@ fn claude_def() -> AgentDef {
         models: None,
         fallback_models: vec!["default".to_string()],
         sessions: None,
+        transcripts: None,
         terminal: None,
         trust: None,
     }
@@ -71,6 +72,7 @@ fn opencode_def() -> AgentDef {
         models: None,
         fallback_models: vec!["default".to_string()],
         sessions: None,
+        transcripts: None,
         terminal: None,
         trust: None,
     }

@@ -48,6 +48,10 @@ pub struct AgentDef {
     #[serde(default)]
     pub fallback_models: Vec<String>,
     pub sessions: Option<SessionsDef>,
+    /// Where the agent keeps conversation transcripts; separate from
+    /// `sessions`, which feeds project detection.
+    #[serde(default)]
+    pub transcripts: Option<TranscriptsDef>,
     /// Interactive terminal launch recipe; `None` = plain binary fallback.
     #[serde(default)]
     pub terminal: Option<TerminalDef>,
@@ -69,4 +73,13 @@ pub struct ModelsDef {
 pub struct SessionsDef {
     pub path: String,
     pub parser: String,
+}
+
+/// Transcript store of an agent: a location template (see
+/// [`crate::paths::expand`]) and its format
+/// (`claude-jsonl` | `codex-rollout` | `opencode-sqlite`).
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct TranscriptsDef {
+    pub path: String,
+    pub format: String,
 }

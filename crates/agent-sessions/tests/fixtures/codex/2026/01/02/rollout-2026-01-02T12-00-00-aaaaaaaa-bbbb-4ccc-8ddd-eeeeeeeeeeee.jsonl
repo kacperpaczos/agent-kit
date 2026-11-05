@@ -1,0 +1,2 @@
+{"timestamp":"2026-01-02T12:00:00.000Z","type":"session_meta","payload":{"id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","timestamp":"2026-01-02T12:00:00.000Z","cwd":"/work/other/sub","originator":"codex_cli_rs","cli_version":"0.165.0","source":{"subagent":{"thread_spawn":{"parent_thread_id":"99999999-8888-4777-8666-555555555555","depth":1}}}}}
+{"timestamp":"2026-01-02T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"child task"}]}}

@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use agent_detect::registry::{AgentDef, ModelsDef, SessionsDef, builtin_agents, parse_agents};
+use agent_detect::registry::{
+    AgentDef, ModelsDef, SessionsDef, TranscriptsDef, builtin_agents, parse_agents,
+};
 use agent_detect::terminal::{ApprovalMode, ContextDef, TerminalDef};
 use agent_detect::trust::{TrustDef, TrustKind};
 
@@ -32,6 +34,10 @@ fn claude_agent() -> AgentDef {
         sessions: Some(SessionsDef {
             path: "~/.claude.json".into(),
             parser: "claude-json".into(),
+        }),
+        transcripts: Some(TranscriptsDef {
+            path: "$CLAUDE_CONFIG_DIR/projects || ~/.claude/projects".into(),
+            format: "claude-jsonl".into(),
         }),
         terminal: Some(TerminalDef {
             args: vec![],
@@ -76,6 +82,11 @@ fn opencode_agent() -> AgentDef {
                 .into(),
             parser: "opencode-sqlite".into(),
         }),
+        transcripts: Some(TranscriptsDef {
+            path: "$XDG_DATA_HOME/opencode/opencode.db || ~/.local/share/opencode/opencode.db"
+                .into(),
+            format: "opencode-sqlite".into(),
+        }),
         terminal: Some(TerminalDef {
             args: vec![],
             cwd_flag: None,
@@ -108,6 +119,10 @@ fn codex_agent() -> AgentDef {
         sessions: Some(SessionsDef {
             path: "$CODEX_HOME/sessions || ~/.codex/sessions".into(),
             parser: "codex-jsonl".into(),
+        }),
+        transcripts: Some(TranscriptsDef {
+            path: "$CODEX_HOME/sessions || ~/.codex/sessions".into(),
+            format: "codex-rollout".into(),
         }),
         terminal: Some(TerminalDef {
             args: vec!["-c".into(), "check_for_update_on_startup=false".into()],
@@ -165,6 +180,7 @@ transport = "mine-transport"
     assert_eq!(agents[0].fallback_models, Vec::<String>::new());
     assert_eq!(agents[0].models, None);
     assert_eq!(agents[0].sessions, None);
+    assert_eq!(agents[0].transcripts, None);
     assert_eq!(agents[0].terminal, None);
     assert_eq!(agents[0].trust, None);
 }
