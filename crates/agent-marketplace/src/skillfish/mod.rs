@@ -25,7 +25,7 @@ pub use parse::{OutdatedSkill, Row, UpdateReport, parse_list, parse_search, pars
 
 use crate::exec::{
     CHECK_TIMEOUT, Cli, LIST_TIMEOUT, MUTATE_TIMEOUT, Plan, SEARCH_TIMEOUT, exit_warning, failed,
-    failed_with, push_unique,
+    failed_with, push_unique, run_each,
 };
 use crate::npx_skills::AGENT_NAMES;
 use crate::provenance::read_skillfish_manifest;
@@ -210,17 +210,35 @@ pub fn plan_remove(req: &RemoveRequest) -> Result<Vec<Plan>> {
 
 /// Re-install one outdated skill from its recorded source, as
 /// `skillfish update` itself does: `--json add <owner/repo> --path <path>
-/// --force --yes --global|--project --agent <agent>`, or by skill name
-/// when the manifest has no path.
+/// --force --yes --global|--project --agent <agent>`.
+///
+/// `skillfish add` has no ref/branch/SHA option (it always fetches the
+/// repository's default branch), so a record pinned to a ref, or one whose
+/// manifest cannot be read, is `Unsupported` rather than silently moved to
+/// another branch.
 pub fn plan_reinstall(outdated: &OutdatedSkill, scope: &Scope) -> Result<Plan> {
     let (owner, repo) = outdated.source.split_once('/').ok_or_else(|| {
         MarketplaceError::Parse(format!("unrecognised source {:?}", outdated.source))
     })?;
     check(Kind::Name, owner)?;
     check(Kind::Name, repo)?;
+    let manifest = read_skillfish_manifest(&outdated.path).ok_or_else(|| {
+        MarketplaceError::Unsupported(format!(
+            "{}: no readable skillfish manifest at {}; its recorded ref is unknown",
+            outdated.skill,
+            outdated.path.display()
+        ))
+    })?;
+    if let Some(pinned) = &manifest.ref_name {
+        return Err(MarketplaceError::Unsupported(format!(
+            "{}: pinned to ref {pinned:?}; `skillfish add` cannot keep a ref, \
+             so only `skillfish update` may update it",
+            outdated.skill
+        )));
+    }
     let mut plan = json_plan("add", Some(scope));
     plan.push(&outdated.source);
-    match read_skillfish_manifest(&outdated.path).and_then(|m| m.path) {
+    match manifest.path {
         Some(path) => {
             check(Kind::Path, &path)?;
             plan.extend(["--path", &path]);
@@ -280,7 +298,12 @@ impl<R: CommandRunner> Skillfish<R> {
     /// `Err` only when nothing at all was confirmed and the command failed.
     fn mutate(&self, plan: Plan, sub: &str, outcome: &mut Outcome) -> Result<()> {
         let output = self.cli.run(plan, MUTATE_TIMEOUT)?;
-        let Some(env) = parse::envelope(&output.stdout) else {
+        let key = if sub == "remove" {
+            "removed"
+        } else {
+            "installed"
+        };
+        let Some(env) = parse::envelope(&output.stdout, key) else {
             if !output.success() {
                 return Err(failed(&output));
             }
@@ -400,26 +423,34 @@ impl<R: CommandRunner> Marketplace for Skillfish<R> {
     }
 
     fn install(&self, req: &InstallRequest) -> Result<Outcome> {
+        let plans = plan_install(req)?;
         let mut outcome = Outcome::default();
-        for plan in plan_install(req)? {
-            self.mutate(plan, "add", &mut outcome)?;
-        }
+        run_each(plans, &mut outcome, |plan, out| {
+            self.mutate(plan, "add", out)
+        })?;
         Ok(outcome)
     }
 
     fn remove(&self, req: &RemoveRequest) -> Result<Outcome> {
+        let plans = plan_remove(req)?;
         let mut outcome = Outcome::default();
-        for plan in plan_remove(req)? {
-            self.mutate(plan, "remove", &mut outcome)?;
-        }
+        run_each(plans, &mut outcome, |plan, out| {
+            self.mutate(plan, "remove", out)
+        })?;
         Ok(outcome)
     }
 
-    /// No names: `update --yes --json`, changed = its `updated` rows.
-    /// Names: check first, then re-install only those reported outdated.
+    /// Global with no names: `update --yes --json` run from HOME, where
+    /// skillfish's project directories are the global ones, so only global
+    /// installs change. Otherwise (project scope, or selected names): check
+    /// first, keep the outdated records of this scope (and names), and
+    /// re-install each one. Upstream `update --yes` in a project would also
+    /// update global installs, so it is never used there. Records pinned to
+    /// a ref cannot be re-installed faithfully: the whole update is then
+    /// `Unsupported` before anything runs.
     fn update(&self, req: &UpdateRequest) -> Result<Outcome> {
         req.skills.iter().try_for_each(|s| check(Kind::Name, s))?;
-        if req.skills.is_empty() {
+        if req.skills.is_empty() && req.scope == Scope::Global {
             let output = self
                 .cli
                 .run(plan_update_all(&req.scope, &self.home), MUTATE_TIMEOUT)?;
@@ -428,12 +459,7 @@ impl<R: CommandRunner> Marketplace for Skillfish<R> {
                 Err(_) if !output.success() => return Err(failed(&output)),
                 Err(e) => return Err(MarketplaceError::Parse(e)),
             };
-            let rows: Vec<Row> = report
-                .updated
-                .into_iter()
-                .filter(|r| Self::in_scope(&req.scope, r.location.as_deref().unwrap_or("")))
-                .collect();
-            let changed = parse::names(&rows);
+            let changed = parse::names(&report.updated);
             if !output.success() && changed.is_empty() {
                 return Err(failed_with(&output, &report.errors.join("; ")));
             }
@@ -444,16 +470,26 @@ impl<R: CommandRunner> Marketplace for Skillfish<R> {
             return Ok(Outcome { changed, warnings });
         }
         let (_, report) = self.check_report(&req.scope)?;
+        let selected: Vec<&OutdatedSkill> = report
+            .outdated
+            .iter()
+            .filter(|o| {
+                Self::in_scope(&req.scope, &o.location)
+                    && (req.skills.is_empty()
+                        || req.skills.iter().any(|s| s.eq_ignore_ascii_case(&o.skill)))
+            })
+            .collect();
+        let plans: Vec<Plan> = selected
+            .iter()
+            .map(|o| plan_reinstall(o, &req.scope))
+            .collect::<Result<_>>()?;
         let mut outcome = Outcome {
             changed: vec![],
             warnings: report.errors.clone(),
         };
-        for outdated in report.outdated.iter().filter(|o| {
-            req.skills.iter().any(|s| s.eq_ignore_ascii_case(&o.skill))
-                && Self::in_scope(&req.scope, &o.location)
-        }) {
-            self.mutate(plan_reinstall(outdated, &req.scope)?, "add", &mut outcome)?;
-        }
+        run_each(plans, &mut outcome, |plan, out| {
+            self.mutate(plan, "add", out)
+        })?;
         Ok(outcome)
     }
 }

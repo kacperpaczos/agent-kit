@@ -24,7 +24,7 @@ use serde::Deserialize;
 
 use crate::exec::{
     Cli, LIST_TIMEOUT, MUTATE_TIMEOUT, Plan, SEARCH_TIMEOUT, failed, failed_with, matches_query,
-    push_unique, query_words,
+    push_unique, query_words, run_each,
 };
 use crate::provenance::plugin_skill_dirs;
 use crate::runner::{CancelToken, CommandRunner};
@@ -369,28 +369,32 @@ impl<R: CommandRunner> Marketplace for CodexPlugins<R> {
             .map(|id| plan_remove(id))
             .collect::<Result<_>>()?;
         let mut outcome = Outcome::default();
-        for (id, plan) in req.skills.iter().zip(plans) {
-            let before = self.installed_ids()?;
-            let output = self.cli.run(plan, MUTATE_TIMEOUT)?;
-            let gone = match self.installed_ids() {
-                Ok(after) => Some(before.contains(id) && !after.contains(id)),
-                Err(e) => {
-                    outcome
-                        .warnings
-                        .push(format!("removal not confirmed: listing failed ({e})"));
-                    None
+        run_each(
+            req.skills.iter().zip(plans),
+            &mut outcome,
+            |(id, plan), out| {
+                let before = self.installed_ids()?;
+                let output = self.cli.run(plan, MUTATE_TIMEOUT)?;
+                let gone = match self.installed_ids() {
+                    Ok(after) => Some(before.contains(id) && !after.contains(id)),
+                    Err(e) => {
+                        out.warnings
+                            .push(format!("removal not confirmed: listing failed ({e})"));
+                        None
+                    }
+                };
+                if gone == Some(true) {
+                    push_unique(&mut out.changed, id);
+                } else if !output.success() {
+                    return Err(failed_with(&output, ""));
+                } else if gone == Some(false) {
+                    out.warnings.push(format!(
+                        "`codex plugin remove {id}` changed no installed plugin"
+                    ));
                 }
-            };
-            if gone == Some(true) {
-                push_unique(&mut outcome.changed, id);
-            } else if !output.success() {
-                return Err(failed_with(&output, ""));
-            } else if gone == Some(false) {
-                outcome.warnings.push(format!(
-                    "`codex plugin remove {id}` changed no installed plugin"
-                ));
-            }
-        }
+                Ok(())
+            },
+        )?;
         Ok(outcome)
     }
 

@@ -409,3 +409,23 @@ fn all_channels_lists_every_adapter_in_order() {
     );
     assert!(runner.calls().is_empty(), "building runs nothing");
 }
+
+#[test]
+fn plugins_sharing_one_install_dir_keep_both_identities() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("installed_plugins.json");
+    let record = r#"[{"scope":"user","installPath":"/cache/shared","version":"1.0.0"}]"#;
+    write(
+        &file,
+        &format!(
+            r#"{{"version":2,"plugins":{{"a@m1":{record},"b@m2":{record},"a@m1x":{record}}}}}"#
+        ),
+    );
+    let (plugins, warning) = read_installed_plugins(&file);
+    assert_eq!(warning, None);
+    let ids: Vec<String> = plugins
+        .iter()
+        .map(|p| format!("{}@{}", p.plugin, p.marketplace))
+        .collect();
+    assert_eq!(ids, strings(&["a@m1", "a@m1x", "b@m2"]));
+}

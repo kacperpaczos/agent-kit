@@ -33,7 +33,7 @@ pub use parse::{
 
 use crate::exec::{
     Cli, LIST_TIMEOUT, MUTATE_TIMEOUT, Plan, SEARCH_TIMEOUT, failed_with, matches_query,
-    push_unique, query_words,
+    push_unique, query_words, run_each,
 };
 use crate::provenance::plugin_skill_dirs;
 use crate::runner::{CancelToken, CommandRunner};
@@ -446,15 +446,15 @@ impl<R: CommandRunner> Marketplace for ClaudePlugins<R> {
         }
         req.skills.iter().try_for_each(|s| check_plugin_id(s))?;
         let mut outcome = Outcome::default();
-        for id in &req.skills {
+        run_each(&req.skills, &mut outcome, |id, out| {
             let before = self.plugins(&req.scope)?;
             let (id, scope) = match Self::find(&before, id, &req.scope) {
                 Some(p) => (p.id.clone(), p.scope.clone()),
                 None => (id.clone(), scope_name(&req.scope).to_string()),
             };
             let plan = plan_uninstall(&id, &scope, Self::project_dir(&req.scope))?;
-            self.mutate(plan, &req.scope, &before, |d| d.removed, &mut outcome)?;
-        }
+            self.mutate(plan, &req.scope, &before, |d| d.removed, out)
+        })?;
         Ok(outcome)
     }
 

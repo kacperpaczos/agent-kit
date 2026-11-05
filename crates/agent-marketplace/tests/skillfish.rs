@@ -609,3 +609,160 @@ fn list_runs_and_parses() {
     assert_eq!(skills.len(), 1);
     assert_eq!(runner.argvs(), vec![argv(&["--json", "list", "--global"])]);
 }
+
+// ---- review regressions ----
+
+const UNRECOGNISED: &str = include_str!("fixtures/skillfish_update_unrecognised.json");
+
+fn outdated_json(rows: &[(&str, &Path, &str)]) -> String {
+    let rows: Vec<String> = rows
+        .iter()
+        .map(|(skill, path, location)| {
+            format!(
+                r#"{{"skill":"{skill}","agent":"Claude Code","path":"{}","location":"{location}","localSha":"a","remoteSha":"b","source":"anthropics/skills"}}"#,
+                path.display()
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"success":true,"exit_code":0,"errors":[],"outdated":[{}],"updated":[]}}"#,
+        rows.join(",")
+    )
+}
+
+fn added(skill: &str) -> String {
+    format!(
+        r#"{{"success":true,"installed":[{{"skill":"{skill}","agent":"Claude Code","path":"x","location":"project"}}],"skipped":[],"errors":[],"exit_code":0}}"#
+    )
+}
+
+#[test]
+fn project_update_reinstalls_only_project_records_never_update_yes() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let global = skill_dir(home.path(), ".claude/skills/pdf", "# g");
+    manifest(&global, "anthropics", "skills", "skills/pdf", None);
+    let local = skill_dir(project.path(), ".claude/skills/csv", "# p");
+    manifest(&local, "anthropics", "skills", "skills/csv", None);
+    let check = outdated_json(&[("pdf", &global, "global"), ("csv", &local, "project")]);
+    let runner = FakeRunner::with(vec![out(0, &check), out(0, &added("csv"))]);
+    let fish = Skillfish::new(&runner, home.path().to_path_buf());
+    let outcome = fish
+        .update(&UpdateRequest {
+            skills: vec![],
+            scope: Scope::Project(project.path().to_path_buf()),
+        })
+        .unwrap();
+    assert_eq!(outcome.changed, strings(&["csv"]));
+    let calls = runner.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].args[2..], strings(&["--json", "update"]));
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.args[2..] == strings(&["--json", "update", "--yes"]))
+    );
+    assert_eq!(
+        calls[1].args[2..],
+        strings(&[
+            "--json",
+            "add",
+            "anthropics/skills",
+            "--path",
+            "skills/csv",
+            "--force",
+            "--yes",
+            "--project",
+            "--agent",
+            "Claude Code",
+        ])
+    );
+    assert_eq!(calls[1].cwd, Some(project.path().to_path_buf()));
+}
+
+#[test]
+fn selective_update_of_a_ref_pinned_skill_is_unsupported_before_anything_runs() {
+    let home = tempfile::tempdir().unwrap();
+    let pdf = skill_dir(home.path(), ".claude/skills/pdf", "# pdf");
+    write(
+        &pdf.join(".skillfish.json"),
+        r#"{"version":2,"name":"pdf","owner":"anthropics","repo":"skills","path":"skills/pdf","branch":"v1","sha":"a","ref":"v1"}"#,
+    );
+    let runner = FakeRunner::with(vec![out(0, &outdated_json(&[("pdf", &pdf, "global")]))]);
+    let fish = Skillfish::new(&runner, home.path().to_path_buf());
+    let err = fish
+        .update(&UpdateRequest {
+            skills: strings(&["pdf"]),
+            scope: Scope::Global,
+        })
+        .unwrap_err();
+    match err {
+        MarketplaceError::Unsupported(msg) => assert!(msg.contains("v1"), "{msg}"),
+        other => panic!("unexpected {other:?}"),
+    }
+    assert_eq!(runner.calls().len(), 1, "only the check ran");
+}
+
+#[test]
+fn unrecognised_update_json_is_not_up_to_date() {
+    assert!(parse_update(UNRECOGNISED).is_err());
+    let root = tempfile::tempdir().unwrap();
+    let pdf = skill_dir(root.path(), ".claude/skills/pdf", "# pdf");
+    manifest(&pdf, "anthropics", "skills", "skills/pdf", None);
+    let runner = FakeRunner::with(vec![out(0, UNRECOGNISED)]);
+    let fish = Skillfish::new(&runner, root.path().to_path_buf());
+    let err = fish.check(&[installed("pdf", pdf, "claude")]).unwrap_err();
+    assert!(matches!(err, MarketplaceError::Parse(_)), "{err:?}");
+}
+
+#[test]
+fn unrecognised_add_json_confirms_nothing() {
+    let runner = FakeRunner::with(vec![out(0, "{}")]);
+    let fish = Skillfish::new(&runner, PathBuf::from("/home/dev"));
+    let outcome = fish
+        .install(&InstallRequest {
+            source: github("o", "r", Some("x")),
+            skills: vec![],
+            scope: Scope::Global,
+            agents: AgentSelection::Detected,
+        })
+        .unwrap();
+    assert!(outcome.changed.is_empty());
+    assert!(outcome.warnings[0].contains("unrecognised"));
+}
+
+#[test]
+fn a_later_failure_keeps_earlier_confirmed_installs_and_removals() {
+    let failed = r#"{"success":false,"installed":[],"skipped":[],"errors":["Repository not found"],"exit_code":4}"#;
+    let runner = FakeRunner::with(vec![out(0, &added("a")), err_out(4, failed, "")]);
+    let fish = Skillfish::new(&runner, PathBuf::from("/home/dev"));
+    let outcome = fish
+        .install(&InstallRequest {
+            source: github("o", "r", None),
+            skills: strings(&["a", "b"]),
+            scope: Scope::Global,
+            agents: AgentSelection::Detected,
+        })
+        .unwrap();
+    assert_eq!(outcome.changed, strings(&["a"]));
+    assert!(
+        outcome
+            .warnings
+            .iter()
+            .any(|w| w.contains("Repository not found"))
+    );
+
+    let none =
+        r#"{"success":false,"exit_code":4,"errors":["Skill \"csv\" not found"],"removed":[]}"#;
+    let runner = FakeRunner::with(vec![out(0, REMOVE), err_out(4, none, "")]);
+    let fish = Skillfish::new(&runner, PathBuf::from("/home/dev"));
+    let outcome = fish
+        .remove(&RemoveRequest {
+            skills: strings(&["pdf", "csv"]),
+            scope: Scope::Global,
+            agents: AgentSelection::Detected,
+        })
+        .unwrap();
+    assert_eq!(outcome.changed, strings(&["pdf"]));
+    assert!(outcome.warnings.iter().any(|w| w.contains("not found")));
+}

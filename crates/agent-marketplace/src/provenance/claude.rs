@@ -82,7 +82,9 @@ pub fn read_installed_plugins(file: &Path) -> (Vec<InstalledPlugin>, Option<Stri
                 };
                 for r in records {
                     let duplicate = plugins.iter().any(|p: &InstalledPlugin| {
-                        p.install_path == r.install_path
+                        p.plugin == plugin
+                            && p.marketplace == marketplace
+                            && p.install_path == r.install_path
                             && p.scope == r.scope
                             && p.project_path == r.project_path
                     });

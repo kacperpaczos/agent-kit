@@ -21,6 +21,10 @@ pub struct SkillfishManifest {
     pub path: Option<String>,
     /// Installed directory name (version 2).
     pub name: Option<String>,
+    /// Branch recorded at install time.
+    pub branch: Option<String>,
+    /// The ref the user pinned (`owner/repo@ref`), if any.
+    pub ref_name: Option<String>,
     /// `manual` or `manifest` (installed from a `skillfish.json`; those are
     /// updated by `skillfish install`, never by `skillfish update`).
     pub source: Option<String>,
@@ -35,6 +39,9 @@ struct Raw {
     repo: String,
     path: Option<String>,
     name: Option<String>,
+    branch: Option<String>,
+    #[serde(rename = "ref")]
+    ref_name: Option<String>,
     source: Option<String>,
 }
 
@@ -51,6 +58,8 @@ pub fn read_skillfish_manifest(dir: &Path) -> Option<SkillfishManifest> {
         repo: m.repo,
         path: m.path,
         name: m.name,
+        branch: m.branch,
+        ref_name: m.ref_name.filter(|r| !r.is_empty()),
         source: m.source,
     })
 }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::runner::{CancelToken, Command, CommandRunner, Output, RunError};
-use crate::types::{MarketplaceError, Result, Scope};
+use crate::types::{MarketplaceError, Outcome, Result, Scope};
 
 pub(crate) const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const LIST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -154,4 +154,33 @@ pub(crate) fn query_words(query: &str) -> Result<Vec<String>> {
         return Err(MarketplaceError::Invalid("empty search query".to_string()));
     }
     Ok(words)
+}
+
+/// Run `step` for every item, keeping what earlier steps confirmed: a
+/// failed step becomes a warning and the rest still run (cancellation
+/// stops the loop). `Err` only when nothing at all was confirmed.
+pub(crate) fn run_each<T>(
+    items: impl IntoIterator<Item = T>,
+    outcome: &mut Outcome,
+    mut step: impl FnMut(T, &mut Outcome) -> Result<()>,
+) -> Result<()> {
+    let mut first: Option<MarketplaceError> = None;
+    for item in items {
+        match step(item, outcome) {
+            Ok(()) => {}
+            Err(MarketplaceError::Cancelled) => {
+                outcome.warnings.push("cancelled".to_string());
+                first.get_or_insert(MarketplaceError::Cancelled);
+                break;
+            }
+            Err(e) => {
+                outcome.warnings.push(e.to_string());
+                first.get_or_insert(e);
+            }
+        }
+    }
+    match first {
+        Some(e) if outcome.changed.is_empty() => Err(e),
+        _ => Ok(()),
+    }
 }

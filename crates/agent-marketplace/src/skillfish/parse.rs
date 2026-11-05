@@ -45,16 +45,15 @@ pub struct OutdatedSkill {
     pub source: String,
 }
 
-/// `update --json` (check) or `update --yes --json` (apply).
+/// `update --json` (check) or `update --yes --json` (apply). `success`,
+/// `outdated` and `updated` are always printed upstream and required here,
+/// so unrelated JSON (e.g. `{}`) is never read as "nothing outdated".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct UpdateReport {
-    #[serde(default)]
     pub success: bool,
     #[serde(default)]
     pub errors: Vec<String>,
-    #[serde(default)]
     pub outdated: Vec<OutdatedSkill>,
-    #[serde(default)]
     pub updated: Vec<Row>,
 }
 
@@ -100,9 +99,16 @@ struct SearchRow {
     description: Option<String>,
 }
 
-/// The JSON object on stdout; skillfish prints exactly one.
-pub(crate) fn envelope(stdout: &str) -> Option<Envelope> {
-    serde_json::from_str(stdout.trim()).ok()
+/// The JSON object on stdout (skillfish prints exactly one), only when it
+/// carries `success` and the command's own row list `key` (`installed`,
+/// `removed`); anything else is unrecognised.
+pub(crate) fn envelope(stdout: &str, key: &str) -> Option<Envelope> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    let object = value.as_object()?;
+    if !object.contains_key("success") || !object.contains_key(key) {
+        return None;
+    }
+    serde_json::from_value(value).ok()
 }
 
 /// Parse `search --json`. `github` is `owner/repo`; anything else is kept
@@ -142,7 +148,7 @@ pub fn parse_search(stdout: &str) -> Result<SearchResults, String> {
 /// directories, whoever installed it; only rows whose directory holds a
 /// skillfish manifest belong to this channel.
 pub fn parse_list(stdout: &str, scope: &Scope) -> Result<Vec<InstalledSkill>, String> {
-    let env = envelope(stdout)
+    let env = envelope(stdout, "installed")
         .ok_or_else(|| "unrecognised `skillfish list --json` output".to_string())?;
     Ok(env
         .installed

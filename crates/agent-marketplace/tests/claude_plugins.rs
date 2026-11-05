@@ -528,3 +528,33 @@ fn check_is_unknown_without_running_anything() {
     assert_eq!(infos[0].available, None);
     assert!(runner.calls().is_empty());
 }
+
+#[test]
+fn a_later_uninstall_failure_keeps_the_confirmed_removal() {
+    let before = rooted(LIST, Path::new("/r"));
+    let after = before.replace("doc-tools@acme", "gone@acme");
+    let runner = FakeRunner::with(vec![
+        out(0, &before),
+        out(
+            0,
+            &result("ok", "Successfully uninstalled plugin: doc-tools"),
+        ),
+        out(0, &after),
+        out(0, &after),
+        err_out(
+            1,
+            &result("failed", "Failed to uninstall plugin \\\"nope@acme\\\""),
+            "",
+        ),
+        out(0, &after),
+    ]);
+    let outcome = ClaudePlugins::new(&runner)
+        .remove(&RemoveRequest {
+            skills: strings(&["doc-tools@acme", "nope@acme"]),
+            scope: Scope::Global,
+            agents: AgentSelection::Detected,
+        })
+        .unwrap();
+    assert_eq!(outcome.changed, strings(&["doc-tools@acme"]));
+    assert!(outcome.warnings.iter().any(|w| w.contains("nope@acme")));
+}
