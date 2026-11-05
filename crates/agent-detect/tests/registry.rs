@@ -105,7 +105,7 @@ fn codex_agent() -> AgentDef {
             parser: "codex-jsonl".into(),
         }),
         terminal: Some(TerminalDef {
-            args: vec![],
+            args: vec!["-c".into(), "check_for_update_on_startup=false".into()],
             cwd_flag: Some("-C".into()),
             context: ContextDef::ConfigFlag {
                 flag: "-c".into(),

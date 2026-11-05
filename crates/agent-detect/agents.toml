@@ -72,6 +72,8 @@ parser = "codex-jsonl"
 # becomes developer instructions via a `-c` config override, not the first
 # user message.
 [agent.terminal]
+# The interactive update banner is noise inside an embedding host.
+args = ["-c", "check_for_update_on_startup=false"]
 cwd_flag = "-C"
 context = { kind = "config_flag", flag = "-c", key = "developer_instructions" }
 

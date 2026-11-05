@@ -113,7 +113,7 @@ fn codex_launch_per_mode_passes_context_as_developer_instructions() {
         (ApprovalMode::Plan, ["-a", "on-request", "-s", "read-only"]),
     ];
     for (mode, mode_args) in expected {
-        let mut args = strings(&["-C", "/work/dir"]);
+        let mut args = strings(&["-c", "check_for_update_on_startup=false", "-C", "/work/dir"]);
         args.extend(strings(&mode_args));
         args.push("-c".into());
         args.push(r#"developer_instructions="the context""#.into());
