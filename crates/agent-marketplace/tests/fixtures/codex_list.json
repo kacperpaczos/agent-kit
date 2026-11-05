@@ -1,0 +1,39 @@
+{
+  "installed": [
+    {
+      "pluginId": "gmail@openai-curated",
+      "name": "gmail",
+      "marketplaceName": "openai-curated",
+      "version": "1.4.0",
+      "installed": true,
+      "enabled": true,
+      "source": { "source": "git", "url": "https://github.com/openai/plugins.git", "ref": "main" },
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_USE"
+    }
+  ],
+  "available": [
+    {
+      "pluginId": "pdf-kit@debug",
+      "name": "pdf-kit",
+      "marketplaceName": "debug",
+      "version": null,
+      "installed": false,
+      "enabled": false,
+      "source": { "source": "local", "path": "{ROOT}/market/plugins/pdf-kit" },
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_INSTALL"
+    },
+    {
+      "pluginId": "slides@openai-curated",
+      "name": "slides",
+      "marketplaceName": "openai-curated",
+      "version": "0.2.0",
+      "installed": false,
+      "enabled": false,
+      "source": { "source": "remote", "id": "plg_123" },
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_USE"
+    }
+  ]
+}

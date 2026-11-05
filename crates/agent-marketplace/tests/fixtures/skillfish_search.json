@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "exit_code": 0,
+  "errors": [],
+  "query": "pdf tools",
+  "results": [
+    {
+      "name": "pdf",
+      "slug": "anthropics-skills-pdf",
+      "owner": "anthropics",
+      "github": "anthropics/skills",
+      "url": "https://www.skill.fish/skill/anthropics-skills-pdf",
+      "description": "Extract text and tables from PDF files",
+      "stars": 4200
+    },
+    {
+      "name": "pdf-forms",
+      "slug": "acme-pdf-forms",
+      "owner": "acme",
+      "github": "acme/pdf-forms",
+      "url": "https://www.skill.fish/skill/acme-pdf-forms",
+      "description": "Fill PDF forms",
+      "stars": 12
+    }
+  ],
+  "total_count": 2
+}

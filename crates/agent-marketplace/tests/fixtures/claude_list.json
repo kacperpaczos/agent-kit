@@ -1,0 +1,37 @@
+[
+  {
+    "id": "doc-tools@acme",
+    "version": "1.2.3",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "{ROOT}/plugins/cache/acme/doc-tools/1.2.3",
+    "installedAt": "2026-02-03T00:00:00Z",
+    "lastUpdated": "2026-02-03T00:00:00Z"
+  },
+  {
+    "id": "single@acme",
+    "version": "0.1.0",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "{ROOT}/plugins/cache/acme/single/0.1.0",
+    "installedAt": "2026-02-04T00:00:00Z",
+    "lastUpdated": "2026-02-04T00:00:00Z"
+  },
+  {
+    "id": "team-lint@acme",
+    "version": "2.0.0",
+    "scope": "project",
+    "enabled": true,
+    "installPath": "{ROOT}/plugins/cache/acme/team-lint/2.0.0",
+    "projectPath": "{ROOT}/project",
+    "installedAt": "2026-02-05T00:00:00Z",
+    "lastUpdated": "2026-02-05T00:00:00Z"
+  },
+  {
+    "id": "local-dir@skills-dir",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "{ROOT}/.claude/skills/local-dir"
+  }
+]

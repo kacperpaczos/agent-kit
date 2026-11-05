@@ -9,9 +9,11 @@ The workspace contains three crates:
 - **`agent-run`** — give a detected agent one task and stream its output
   as normalized events, with a cooperative `Stop` flag.
 - **`agent-marketplace`** — search, list, install, remove, update and check
-  skills through marketplace CLIs (currently `npx skills`, vercel-labs/skills),
-  argv-only behind an injectable `CommandRunner`, plus one space that shows
-  each skill once with all its installations and whether copies diverge.
+  skills through marketplace CLIs (`npx skills`, skillfish, Claude Code
+  plugin marketplaces, Codex plugins where its CLI allows), argv-only behind
+  an injectable `CommandRunner`; read-only provenance readers for each
+  channel's own records; and one space that shows each skill once with all
+  its installations and whether copies diverge.
 
 The crates have no host-app dependency and can be embedded in any app.
 

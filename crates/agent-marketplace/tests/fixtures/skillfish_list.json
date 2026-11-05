@@ -1,0 +1,12 @@
+{
+  "success": true,
+  "exit_code": 0,
+  "errors": [],
+  "installed": [
+    { "agent": "Claude Code", "skill": "pdf", "path": "{ROOT}/.claude/skills/pdf", "location": "global" },
+    { "agent": "Codex", "skill": "pdf", "path": "{ROOT}/.codex/skills/pdf", "location": "global" },
+    { "agent": "Claude Code", "skill": "handmade", "path": "{ROOT}/.claude/skills/handmade", "location": "global" },
+    { "agent": "Cursor", "skill": "pdf-forms", "path": "{ROOT}/.cursor/skills/pdf-forms", "location": "global" }
+  ],
+  "agents_detected": ["Claude Code", "Codex", "Cursor"]
+}

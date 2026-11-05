@@ -1,0 +1,8 @@
+{
+  "pluginId": "pdf-kit@debug",
+  "name": "pdf-kit",
+  "marketplaceName": "debug",
+  "version": "local",
+  "installedPath": "/home/dev/.codex/plugins/cache/debug/pdf-kit/local",
+  "authPolicy": "ON_INSTALL"
+}

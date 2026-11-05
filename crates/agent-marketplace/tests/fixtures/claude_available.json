@@ -1,0 +1,27 @@
+{
+  "installed": [],
+  "available": [
+    {
+      "pluginId": "pdf-suite@acme",
+      "name": "pdf-suite",
+      "marketplaceName": "acme",
+      "source": "./plugins/pdf-suite",
+      "description": "PDF reading and form filling",
+      "version": "3.1.0",
+      "installCount": 1520
+    },
+    {
+      "pluginId": "deploy@other",
+      "name": "deploy",
+      "marketplaceName": "other",
+      "source": { "source": "github", "repo": "other/deploy" },
+      "description": "Deployment helpers"
+    },
+    {
+      "pluginId": "commit-helper@acme",
+      "name": "commit-helper",
+      "marketplaceName": "acme",
+      "source": "./plugins/commit-helper"
+    }
+  ]
+}

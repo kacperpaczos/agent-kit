@@ -1,0 +1,14 @@
+[
+  {
+    "name": "acme",
+    "source": "github",
+    "repo": "acme/claude-plugins",
+    "installLocation": "{ROOT}/plugins/marketplaces/acme"
+  },
+  {
+    "name": "other",
+    "source": "url",
+    "url": "https://example.com/marketplace.json",
+    "installLocation": "{ROOT}/plugins/marketplaces/other"
+  }
+]

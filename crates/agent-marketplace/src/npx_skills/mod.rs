@@ -10,9 +10,8 @@
 //! argument starting with `-`, so positional names always come before
 //! those flags and the agent list comes last.
 
-mod parse;
+pub(crate) mod parse;
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 pub use parse::{parse_add_json, parse_check, parse_find, parse_list_json};
@@ -71,31 +70,7 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MUTATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-/// Argv after the `skills` word, plus the directory to run in (the project
-/// for project scope).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Plan {
-    pub args: Vec<String>,
-    pub cwd: Option<PathBuf>,
-}
-
-impl Plan {
-    fn new(sub: &str, scope: Option<&Scope>) -> Plan {
-        Plan {
-            args: vec![sub.to_string()],
-            cwd: match scope {
-                Some(Scope::Project(dir)) => Some(dir.clone()),
-                _ => None,
-            },
-        }
-    }
-    fn push(&mut self, arg: &str) {
-        self.args.push(arg.to_string());
-    }
-    fn extend<'a>(&mut self, args: impl IntoIterator<Item = &'a str>) {
-        self.args.extend(args.into_iter().map(str::to_string));
-    }
-}
+pub use crate::exec::Plan;
 
 /// `find <word>...` — the CLI joins the words back with spaces.
 pub fn plan_search(query: &str) -> Result<Plan> {

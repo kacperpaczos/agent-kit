@@ -1,0 +1,8 @@
+{
+  "success": true,
+  "exit_code": 0,
+  "errors": [],
+  "removed": [
+    { "skill": "pdf", "agent": "Claude Code", "path": "/home/dev/.claude/skills/pdf", "location": "global" }
+  ]
+}

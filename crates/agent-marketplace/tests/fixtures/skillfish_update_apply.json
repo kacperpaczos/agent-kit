@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "exit_code": 0,
+  "errors": [],
+  "outdated": [
+    {
+      "skill": "pdf",
+      "agent": "Claude Code",
+      "path": "/home/dev/.claude/skills/pdf",
+      "location": "global",
+      "localSha": "1111111111111111111111111111111111111111",
+      "remoteSha": "2222222222222222222222222222222222222222",
+      "source": "anthropics/skills"
+    }
+  ],
+  "updated": [
+    { "skill": "pdf", "agent": "Claude Code", "path": "/home/dev/.claude/skills/pdf", "location": "global" }
+  ]
+}

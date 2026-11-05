@@ -1,0 +1,17 @@
+{
+  "success": false,
+  "exit_code": 0,
+  "errors": ["broken: Repository not found"],
+  "outdated": [
+    {
+      "skill": "pdf",
+      "agent": "Claude Code",
+      "path": "{ROOT}/.claude/skills/pdf",
+      "location": "global",
+      "localSha": "1111111111111111111111111111111111111111",
+      "remoteSha": "2222222222222222222222222222222222222222",
+      "source": "anthropics/skills"
+    }
+  ],
+  "updated": []
+}

@@ -60,9 +60,25 @@ pub fn parse_list_json(
 
 /// Map a lock entry's `source`/`sourceUrl`/`sourceType` to a [`SourceRef`].
 fn lock_source(row: &ListRow) -> Option<SourceRef> {
-    let source = row.source.as_deref();
-    let url = row.source_url.as_deref().or(source)?;
-    let kind = match row.source_type.as_deref() {
+    source_from_lock(
+        &row.name,
+        row.source.as_deref(),
+        row.source_url.as_deref(),
+        row.source_type.as_deref(),
+    )
+}
+
+/// A lock entry's `source`/`sourceUrl`/`sourceType` as a [`SourceRef`]
+/// narrowed to skill `name`; shared with the lock-file readers.
+pub(crate) fn source_from_lock(
+    name: &str,
+    source: Option<&str>,
+    source_url: Option<&str>,
+    source_type: Option<&str>,
+) -> Option<SourceRef> {
+    let source = source.filter(|s| !s.is_empty());
+    let url = source_url.filter(|s| !s.is_empty()).or(source)?;
+    let kind = match source_type {
         Some("local") => SourceKind::Local {
             path: PathBuf::from(source.unwrap_or(url)),
         },
@@ -78,12 +94,12 @@ fn lock_source(row: &ListRow) -> Option<SourceRef> {
     };
     Some(SourceRef {
         kind,
-        skill: Some(row.name.clone()),
+        skill: Some(name.to_string()),
     })
 }
 
 /// `owner/repo` with exactly one slash and no spaces.
-fn owner_repo(text: &str) -> Option<(String, String)> {
+pub(crate) fn owner_repo(text: &str) -> Option<(String, String)> {
     let (owner, repo) = text.split_once('/')?;
     let plain = |s: &str| !s.is_empty() && !s.contains('/') && !s.contains(char::is_whitespace);
     (plain(owner) && plain(repo)).then(|| (owner.to_string(), repo.to_string()))

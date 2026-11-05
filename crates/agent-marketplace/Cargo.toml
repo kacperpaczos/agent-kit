@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"
-description = "Skill marketplaces for AI-agent CLIs: search, list, install, remove, update and check through argv-only adapters (npx skills), plus one space over every installation"
+description = "Skill marketplaces for AI-agent CLIs: search, list, install, remove, update and check through argv-only adapters (npx skills, skillfish, Claude Code and Codex plugins), provenance readers, and one space over every installation"
 repository = "https://github.com/kacperpaczos/agent-kit"
 
 [dependencies]

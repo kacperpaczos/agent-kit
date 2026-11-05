@@ -1,0 +1,12 @@
+{
+  "success": true,
+  "installed": [
+    { "skill": "pdf", "agent": "Claude Code", "path": "/home/dev/.claude/skills/pdf", "location": "global" },
+    { "skill": "pdf", "agent": "Codex", "path": "/home/dev/.codex/skills/pdf", "location": "global" }
+  ],
+  "skipped": [
+    { "skill": "pdf", "agent": "Cursor", "reason": "Already exists (use --force to overwrite)" }
+  ],
+  "errors": [],
+  "exit_code": 0
+}
