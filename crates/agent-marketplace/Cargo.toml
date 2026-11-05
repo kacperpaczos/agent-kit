@@ -1,0 +1,16 @@
+[package]
+name = "agent-marketplace"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "Skill marketplaces for AI-agent CLIs: search, list, install, remove, update and check through argv-only adapters (npx skills), plus one space over every installation"
+repository = "https://github.com/kacperpaczos/agent-kit"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

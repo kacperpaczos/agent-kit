@@ -1,0 +1,4 @@
+[38;5;145mChecking for skill updates…[0m
+
+[38;5;145m✓ All global skills are up to date[0m
+

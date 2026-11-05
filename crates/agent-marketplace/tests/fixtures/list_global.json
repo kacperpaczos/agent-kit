@@ -1,0 +1,52 @@
+[
+  {
+    "name": "frontend-design",
+    "path": "/home/u/.agents/skills/frontend-design",
+    "scope": "global",
+    "agents": ["Claude Code", "Codex", "OpenCode", "Cursor"],
+    "source": "vercel-labs/agent-skills",
+    "sourceUrl": "https://github.com/vercel-labs/agent-skills.git",
+    "sourceType": "github",
+    "status": "tracked"
+  },
+  {
+    "name": "my-local",
+    "path": "/home/u/.agents/skills/my-local",
+    "scope": "global",
+    "agents": ["Claude Code"],
+    "source": "/home/u/src/my-local",
+    "sourceUrl": "/home/u/src/my-local",
+    "sourceType": "local",
+    "status": "tracked"
+  },
+  {
+    "name": "hand-made",
+    "path": "/home/u/.agents/skills/hand-made",
+    "scope": "global",
+    "agents": [],
+    "source": null,
+    "sourceUrl": null,
+    "sourceType": null,
+    "status": "untracked"
+  },
+  {
+    "name": "docs-helper",
+    "path": "/home/u/.agents/skills/docs-helper",
+    "scope": "global",
+    "agents": ["Codex"],
+    "source": "gitlab.com/org/repo",
+    "sourceUrl": "https://gitlab.com/org/repo.git",
+    "sourceType": "gitlab",
+    "status": "tracked"
+  },
+  {
+    "name": "gone",
+    "path": null,
+    "scope": "global",
+    "agents": [],
+    "source": "acme/tools",
+    "sourceUrl": "https://github.com/acme/tools.git",
+    "sourceType": "github",
+    "status": "missing"
+  }
+]

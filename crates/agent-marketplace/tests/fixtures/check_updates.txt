@@ -1,0 +1,11 @@
+[38;5;145mChecking for skill updates…[0m
+
+[38;5;102mFetching 3 sources…[0m
+[K[38;5;145m↑ frontend-design has an update[0m
+
+[38;5;102m1 skill(s) cannot be checked automatically:[0m
+  [38;5;145m•[0m my-local [38;5;102m(local source)[0m
+    [38;5;102mTo update: [38;5;145mnpx skills add ./x -g -y[0m
+
+[38;5;145m1 skill(s) can be updated; run [1mnpx skills update[0m[38;5;145m to install[0m
+

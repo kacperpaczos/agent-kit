@@ -1,0 +1,27 @@
+[
+  {
+    "name": "frontend-design",
+    "status": "installed",
+    "source": "vercel-labs/agent-skills",
+    "ref": null,
+    "hash": "abc123",
+    "path": "/home/u/.agents/skills/frontend-design",
+    "scope": "global",
+    "agents": [
+      "Claude Code",
+      "Codex"
+    ],
+    "mode": "symlink",
+    "security": null
+  },
+  {
+    "name": "skill-creator",
+    "status": "failed",
+    "error": "Failed to create symlink"
+  },
+  {
+    "name": "old-one",
+    "status": "skipped",
+    "reason": "No matching skill found in source"
+  }
+]

@@ -1,0 +1,14 @@
+[38;5;102mInstall with[0m npx skills add <owner/repo@skill>
+
+[38;5;145mvercel-labs/agent-skills@frontend-design[0m [36m1.2K installs[0m
+[38;5;102m└ https://skills.sh/vercel-labs/agent-skills/frontend-design[0m
+
+[38;5;145manthropics/skills@pdf[0m [36m3M installs[0m
+[38;5;102m└ https://skills.sh/anthropics/skills/pdf[0m
+
+[38;5;145macme/tools@one-off[0m [36m1 install[0m
+[38;5;102m└ https://skills.sh/acme/tools/one-off[0m
+
+[38;5;145macme/tools@fresh[0m
+[38;5;102m└ https://skills.sh/acme/tools/fresh[0m
+

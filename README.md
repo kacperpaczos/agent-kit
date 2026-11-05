@@ -1,6 +1,6 @@
 # agent-kit
 
-The workspace contains two crates:
+The workspace contains three crates:
 
 - **`agent-detect`** — which agent CLIs are installed on a machine, their
   versions, and whether they are logged in. Currently it knows **Claude
@@ -8,6 +8,10 @@ The workspace contains two crates:
   `openclaude` and `opencode-cli`).
 - **`agent-run`** — give a detected agent one task and stream its output
   as normalized events, with a cooperative `Stop` flag.
+- **`agent-marketplace`** — search, list, install, remove, update and check
+  skills through marketplace CLIs (currently `npx skills`, vercel-labs/skills),
+  argv-only behind an injectable `CommandRunner`, plus one space that shows
+  each skill once with all its installations and whether copies diverge.
 
 The crates have no host-app dependency and can be embedded in any app.
 
