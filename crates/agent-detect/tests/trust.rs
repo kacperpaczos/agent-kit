@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use agent_detect::host::FakeHost;
 use agent_detect::registry::{AgentDef, builtin_agents, parse_agents};
 use agent_detect::trust::{
-    TrustError, TrustState, grant_workspace_trust, trust_file, workspace_trust,
+    TrustError, TrustState, TrustWriteStage, grant_workspace_trust, grant_workspace_trust_hooked,
+    trust_file, workspace_trust,
 };
 
 fn builtin(id: &str) -> &'static AgentDef {
@@ -360,4 +361,200 @@ fn missing_dir_cannot_be_granted() {
     let err = grant_workspace_trust(builtin("claude"), &host, &gone).unwrap_err();
     assert!(matches!(err, TrustError::Io(_)), "{err:?}");
     assert!(!host.home_path().join(".claude.json").exists());
+}
+
+// ---- Write safety ------------------------------------------------------
+
+fn mode_of(path: &Path) -> u32 {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+}
+
+fn codex_file(host: &FakeHost, body: &str) -> PathBuf {
+    let codex_dir = host.home_path().join(".codex");
+    std::fs::create_dir_all(&codex_dir).unwrap();
+    let file = codex_dir.join("config.toml");
+    std::fs::write(&file, body).unwrap();
+    file
+}
+
+#[test]
+fn temp_file_is_private_at_creation_and_gets_the_original_mode() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let file = host.home_path().join(".claude.json");
+    std::fs::write(&file, "{}").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let mut seen = Vec::new();
+
+    grant_workspace_trust_hooked(builtin("claude"), &host, &dir, &mut |stage| match stage {
+        TrustWriteStage::TempCreated { tmp } => seen.push(("created", mode_of(tmp))),
+        TrustWriteStage::BeforeRename { tmp, .. } => seen.push(("rename", mode_of(tmp))),
+    })
+    .unwrap();
+    assert_eq!(seen, [("created", 0o600), ("rename", 0o644)]);
+    assert_eq!(mode_of(&file), 0o644);
+}
+
+#[test]
+fn external_change_between_read_and_rename_is_kept_by_the_retry() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let file = host.home_path().join(".claude.json");
+    std::fs::write(&file, r#"{"a":1}"#).unwrap();
+    let mut attempts = Vec::new();
+
+    grant_workspace_trust_hooked(builtin("claude"), &host, &dir, &mut |stage| {
+        if let TrustWriteStage::BeforeRename { attempt, file, .. } = stage {
+            attempts.push(attempt);
+            if attempt == 0 {
+                // Same length, so a metadata-only check could miss it.
+                std::fs::write(file, r#"{"b":2}"#).unwrap();
+            }
+        }
+    })
+    .unwrap();
+    assert_eq!(attempts, [0, 1]);
+    assert_eq!(
+        json(&file),
+        serde_json::json!({ "b": 2, "projects": { key(&dir): { "hasTrustDialogAccepted": true } } })
+    );
+}
+
+#[test]
+fn file_that_keeps_changing_gives_conflict_and_no_leftovers() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let file = host.home_path().join(".claude.json");
+    std::fs::write(&file, "{}").unwrap();
+    let mut n = 0;
+
+    let err = grant_workspace_trust_hooked(builtin("claude"), &host, &dir, &mut |stage| {
+        if let TrustWriteStage::BeforeRename { file, .. } = stage {
+            n += 1;
+            std::fs::write(file, format!(r#"{{"n":{n}}}"#)).unwrap();
+        }
+    })
+    .unwrap_err();
+    assert_eq!(err, TrustError::Conflict);
+    assert_eq!(n, 3);
+    assert_eq!(read(&file), r#"{"n":3}"#);
+    let names: Vec<String> = std::fs::read_dir(host.home_path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.contains(".claude.json"))
+        .collect();
+    assert_eq!(names, [".claude.json"]);
+}
+
+#[test]
+fn symlinked_config_file_is_written_through_to_its_target() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let dotfiles = host.home_path().join("dotfiles");
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    let target = dotfiles.join("claude.json");
+    std::fs::write(&target, r#"{"x":1}"#).unwrap();
+    let link = host.home_path().join(".claude.json");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    grant_workspace_trust(builtin("claude"), &host, &dir).unwrap();
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        json(&target)["projects"][key(&dir)]["hasTrustDialogAccepted"],
+        true
+    );
+    assert_eq!(json(&target)["x"], 1);
+}
+
+#[test]
+fn dangling_config_symlink_is_an_error_and_untouched() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let target = host.home_path().join("missing").join("claude.json");
+    let link = host.home_path().join(".claude.json");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let err = grant_workspace_trust(builtin("claude"), &host, &dir).unwrap_err();
+    assert!(matches!(err, TrustError::Io(_)), "{err:?}");
+    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    assert!(!host.home_path().join("missing").exists());
+}
+
+#[test]
+fn already_trusted_entries_are_not_rewritten() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let codex_body = format!(
+        "[projects.\"{}\"]\ntrust_level   =  'trusted'   # ok\n",
+        key(&dir)
+    );
+    let codex = codex_file(&host, &codex_body);
+    let claude_body = format!(
+        "{{ \"projects\" : {{ \"{}\" : {{ \"hasTrustDialogAccepted\" : true }} }} }}",
+        key(&dir)
+    );
+    let claude = host.home_path().join(".claude.json");
+    std::fs::write(&claude, &claude_body).unwrap();
+
+    for id in ["codex", "claude"] {
+        grant_workspace_trust_hooked(builtin(id), &host, &dir, &mut |_| {
+            panic!("{id}: no write expected")
+        })
+        .unwrap();
+    }
+    assert_eq!(read(&codex), codex_body);
+    assert_eq!(read(&claude), claude_body);
+}
+
+#[test]
+fn codex_comment_and_spacing_on_the_entry_are_kept() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let body = |level: &str| {
+        format!(
+            "# header\n[projects.\"{k}\"]\n# why\ntrust_level   =   \"{level}\"   # set by me\nother = 1\n",
+            k = key(&dir)
+        )
+    };
+    let file = codex_file(&host, &body("untrusted"));
+
+    grant_workspace_trust(builtin("codex"), &host, &dir).unwrap();
+    assert_eq!(read(&file), body("trusted"));
+}
+
+#[test]
+fn codex_inline_tables_are_supported() {
+    let host = FakeHost::new();
+    let dir = project(&host, "p");
+    let file = codex_file(
+        &host,
+        &format!(
+            "projects = {{ \"{}\" = {{ trust_level = \"untrusted\" }}, \"/a\" = {{ trust_level = \"trusted\" }} }}\n",
+            key(&dir)
+        ),
+    );
+    let codex = builtin("codex");
+
+    grant_workspace_trust(codex, &host, &dir).unwrap();
+    assert_eq!(
+        read(&file),
+        format!(
+            "projects = {{ \"{}\" = {{ trust_level = \"trusted\" }}, \"/a\" = {{ trust_level = \"trusted\" }} }}\n",
+            key(&dir)
+        )
+    );
+
+    let other = project(&host, "q");
+    grant_workspace_trust(codex, &host, &other).unwrap();
+    assert_eq!(workspace_trust(codex, &host, &other), TrustState::Trusted);
+    assert_eq!(workspace_trust(codex, &host, &dir), TrustState::Trusted);
+    assert!(read(&file).starts_with(&format!(
+        "projects = {{ \"{}\" = {{ trust_level = \"trusted\" }}, \"/a\" = {{ trust_level = \"trusted\" }}",
+        key(&dir)
+    )));
 }
