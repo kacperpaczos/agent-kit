@@ -13,7 +13,7 @@ default = ["opencode"]
 opencode = ["dep:rusqlite"]
 
 [dependencies]
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 rusqlite = { version = "0.41", features = ["bundled"], optional = true }
 
@@ -21,4 +21,4 @@ rusqlite = { version = "0.41", features = ["bundled"], optional = true }
 agent-detect = { path = "../agent-detect" }
 tempfile = "3"
 rusqlite = { version = "0.41", features = ["bundled"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }

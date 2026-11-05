@@ -299,3 +299,124 @@ fn not_a_database_is_a_warning() {
     assert!(sessions.is_empty());
     assert_eq!(warnings.len(), 1, "{warnings:?}");
 }
+
+#[test]
+fn oversized_rows_are_skipped_by_stored_length() {
+    for with_parts in [false, true] {
+        let (_dir, env, db) = env_with_db(with_parts);
+        let conn = Connection::open(&db).unwrap();
+        let big = format!(r#"{{"text":"{}"}}"#, "x".repeat(10_000));
+        message(&conn, "ses_main", "msg_big", 7, "user", &big);
+        if with_parts {
+            message(
+                &conn,
+                "ses_main",
+                "msg_8",
+                8,
+                "assistant",
+                r#"{"agent":"a","model":{"id":"m","providerID":"p"},"content":[]}"#,
+            );
+            conn.execute(
+                "INSERT INTO session_part (message_id, session_id, ordinal, type, time_created, time_updated, data)
+                 VALUES ('msg_8', 'ses_main', 0, 'text', 0, 0, ?1), ('msg_8', 'ses_main', 1, 'text', 0, 0, ?2)",
+                params![
+                    format!(r#"{{"type":"text","text":"{}"}}"#, "y".repeat(10_000)),
+                    r#"{"type":"text","text":"after"}"#
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let (sessions, _) = list_sessions(&env, &oc_only());
+        let limits = Limits {
+            max_line: 2_000,
+            ..Limits::default()
+        };
+        let t = read_events(&sessions[0], &limits).unwrap();
+        assert!(
+            t.warnings
+                .iter()
+                .any(|w| w.message.contains("msg_big") && w.message.contains("over the line limit")),
+            "{:?}",
+            t.warnings
+        );
+        assert!(
+            !t.events
+                .iter()
+                .any(|e| format!("{:?}", e.kind).contains("xxxx"))
+        );
+        assert_eq!(t.events[0].kind, EventKind::Text("Review my diff".into()));
+        if with_parts {
+            assert!(
+                t.warnings
+                    .iter()
+                    .any(|w| w.message.contains("part 0 of msg_8")),
+                "{:?}",
+                t.warnings
+            );
+            assert_eq!(
+                t.events.last().unwrap().kind,
+                EventKind::Text("after".into())
+            );
+        }
+    }
+}
+
+#[test]
+fn part_loop_stops_when_the_sink_is_full() {
+    let (_dir, env, _) = env_with_db(true);
+    let (sessions, _) = list_sessions(&env, &oc_only());
+    let limits = Limits {
+        max_events: 3,
+        ..Limits::default()
+    };
+    let t = read_events(&sessions[0], &limits).unwrap();
+    assert_eq!(t.events.len(), 3);
+    assert!(t.truncated);
+}
+
+#[test]
+fn wal_database_with_a_concurrent_writer_is_read_consistently() {
+    let (_dir, env, db) = env_with_db(false);
+    let writer = Connection::open(&db).unwrap();
+    let mode: String = writer
+        .query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+    writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    session(&writer, "ses_new", "/work/oc", None, T0, T0 + 90_000);
+
+    // The uncommitted session is invisible; nothing blocks or fails.
+    let (sessions, warnings) = list_sessions(&env, &oc_only());
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(sessions.len(), 2);
+    let t = read_events(&sessions[0], &Limits::default()).unwrap();
+    assert_eq!(t.events.len(), expected().len());
+
+    writer.execute_batch("COMMIT;").unwrap();
+    let (sessions, _) = list_sessions(&env, &oc_only());
+    assert_eq!(sessions.len(), 3);
+    let check: String = writer
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(check, "ok");
+}
+
+#[test]
+fn locked_database_is_a_warning_not_an_immutable_read() {
+    let (_dir, env, db) = env_with_db(false);
+    let writer = Connection::open(&db).unwrap();
+    writer
+        .execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;")
+        .unwrap();
+    session(&writer, "ses_new", "/work/oc", None, T0, T0 + 90_000);
+    let (sessions, warnings) = list_sessions(&env, &oc_only());
+    assert!(sessions.is_empty(), "{sessions:?}");
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].message.contains("busy/locked"), "{warnings:?}");
+    writer.execute_batch("COMMIT;").unwrap();
+    let check: String = writer
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(check, "ok");
+}

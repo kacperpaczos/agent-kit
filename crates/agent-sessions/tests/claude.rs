@@ -210,3 +210,30 @@ fn missing_home_lists_nothing() {
     let none = agent_sessions::FakeEnv::default();
     assert!(list_sessions(&none, &Filter::default()).0.is_empty());
 }
+
+#[test]
+fn secrets_are_redacted_before_capping() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join(".claude/projects/-w");
+    std::fs::create_dir_all(&project).unwrap();
+    let secret = "z".repeat(9_000);
+    let record = serde_json::json!({
+        "type": "assistant", "sessionId": "s", "cwd": "/w",
+        "timestamp": "2026-01-02T10:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": format!("config: password=\"{secret}\"")},
+            {"type": "tool_use", "id": "t", "name": "Bash",
+             "input": {"command": format!("export PASS && curl -d \"password={secret}\"")}}
+        ]}
+    });
+    std::fs::write(project.join("s.jsonl"), format!("{record}\n")).unwrap();
+    let env = agent_sessions::FakeEnv::with_home(dir.path());
+    let (sessions, _) = list_sessions(&env, &claude_only());
+    let t = read_events(&sessions[0], &Limits::default()).unwrap();
+    assert_eq!(t.events.len(), 2);
+    for e in &t.events {
+        let text = format!("{:?}", e.kind);
+        assert!(!text.contains("zzzz"), "{}", &text[..text.len().min(120)]);
+        assert!(text.contains("[REDACTED]"));
+    }
+}

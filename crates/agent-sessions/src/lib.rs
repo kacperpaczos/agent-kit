@@ -15,6 +15,7 @@
 mod claude;
 mod codex;
 pub mod env;
+mod infer;
 mod lines;
 #[cfg(feature = "opencode")]
 mod opencode;
@@ -23,10 +24,7 @@ pub mod time;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use std::time::SystemTime;
-
-use regex::Regex;
 
 pub use env::{Env, FakeEnv, NativeEnv, Roots};
 pub use redact::redact;
@@ -299,38 +297,58 @@ pub fn read_events(info: &SessionInfo, limits: &Limits) -> Result<Transcript> {
     read_with(info, limits, false)
 }
 
-/// Every skill activation in the sessions matching `filter`, in session
-/// order (newest session first), plus warnings from listing and reading.
-pub fn skill_activations(
-    env: &dyn Env,
-    filter: &Filter,
-) -> (Vec<(SessionInfo, Event)>, Vec<Warning>) {
-    skill_activations_in(&Roots::from_env(env), filter)
+/// Skill activations found by [`skill_activations`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Activations {
+    /// Each activation with its session, newest session first.
+    pub found: Vec<(SessionInfo, Event)>,
+    pub warnings: Vec<Warning>,
+    /// A per-session or the global limit stopped collecting early.
+    pub truncated: bool,
+}
+
+/// Every skill activation in the sessions matching `filter`.
+///
+/// `limits` applies to each session (`max_events` activations,
+/// `max_total` bytes of names) and, with the same values, to the whole
+/// result, so the output stays bounded however many sessions match.
+pub fn skill_activations(env: &dyn Env, filter: &Filter, limits: &Limits) -> Activations {
+    skill_activations_in(&Roots::from_env(env), filter, limits)
 }
 
 /// [`skill_activations`] over explicit locations.
-pub fn skill_activations_in(
-    roots: &Roots,
-    filter: &Filter,
-) -> (Vec<(SessionInfo, Event)>, Vec<Warning>) {
-    let (sessions, mut warnings) = list_sessions_in(roots, filter);
-    let limits = Limits {
-        max_text: 512,
-        max_total: usize::MAX,
-        max_events: usize::MAX,
-        ..Limits::default()
+pub fn skill_activations_in(roots: &Roots, filter: &Filter, limits: &Limits) -> Activations {
+    let (sessions, warnings) = list_sessions_in(roots, filter);
+    let mut out = Activations {
+        warnings,
+        ..Activations::default()
     };
-    let mut out = Vec::new();
-    for info in sessions {
-        match read_with(&info, &limits, true) {
-            Ok(transcript) => {
-                warnings.extend(transcript.warnings);
-                out.extend(transcript.events.into_iter().map(|e| (info.clone(), e)));
+    let mut bytes = 0usize;
+    'sessions: for info in sessions {
+        let transcript = match read_with(&info, limits, true) {
+            Ok(t) => t,
+            Err(err) => {
+                out.warnings.push(Warning::new(&info.path, err.to_string()));
+                continue;
             }
-            Err(err) => warnings.push(Warning::new(&info.path, err.to_string())),
+        };
+        out.warnings.extend(transcript.warnings);
+        out.truncated |= transcript.truncated;
+        for event in transcript.events {
+            let size = match &event.kind {
+                EventKind::SkillActivation { name, .. } => name.len(),
+                _ => 0,
+            };
+            if out.found.len() >= limits.max_events || bytes.saturating_add(size) > limits.max_total
+            {
+                out.truncated = true;
+                break 'sessions;
+            }
+            bytes += size;
+            out.found.push((info.clone(), event));
         }
     }
-    (out, warnings)
+    out
 }
 
 fn read_with(info: &SessionInfo, limits: &Limits, only_skills: bool) -> Result<Transcript> {
@@ -386,16 +404,37 @@ impl<'a> Sink<'a> {
         }
     }
 
-    /// Prepare a text: redact, cap.
+    /// Prepare a text: redact the whole text first, then cap, so a cut
+    /// can never separate a secret from the context that identifies it.
     pub(crate) fn text(&self, raw: &str) -> String {
-        let max = self.limits.max_text;
-        if !self.limits.redact {
-            return cap(raw, max);
+        if self.limits.redact {
+            cap(&redact(raw), self.limits.max_text)
+        } else {
+            cap(raw, self.limits.max_text)
         }
-        // Redact a bounded prefix, so a huge blob costs little and a key
-        // cut at the boundary still lies past the final cap.
-        let pre = cap_bytes(raw, max.saturating_mul(2).saturating_add(64));
-        cap(&redact(pre), max)
+    }
+
+    /// Prepare a JSON tool input / output: strings are redacted inside
+    /// the decoded value (and values under credential-like keys masked)
+    /// before serializing, then the result is capped.
+    pub(crate) fn json(&self, value: &serde_json::Value) -> String {
+        if self.limits.redact {
+            cap(
+                &summarize(&redact::redact_value(value)),
+                self.limits.max_text,
+            )
+        } else {
+            cap(&summarize(value), self.limits.max_text)
+        }
+    }
+
+    /// A tool input that may be JSON text (Codex `arguments`): decoded and
+    /// treated as [`Sink::json`] when it parses, else as plain text.
+    pub(crate) fn json_or_text(&self, raw: &str) -> String {
+        match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(v @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => self.json(&v),
+            _ => self.text(raw),
+        }
     }
 
     pub(crate) fn push(&mut self, ts: Option<SystemTime>, role: Role, kind: EventKind) {
@@ -464,14 +503,6 @@ pub(crate) fn summarize(value: &serde_json::Value) -> String {
     }
 }
 
-/// The skill named by a path `…/<name>/SKILL.md` inside a tool input.
-pub(crate) fn skill_from_path(input: &str) -> Option<String> {
-    static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"[/\\]([A-Za-z0-9][A-Za-z0-9._:-]*)[/\\]SKILL\.md\b").expect("valid regex")
-    });
-    RE.captures(input).map(|c| c[1].to_string())
-}
-
 /// File modification time; `None` when unreadable.
 fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
@@ -486,19 +517,5 @@ mod tests {
         assert_eq!(cap("abc", 3), "abc");
         assert_eq!(cap("abcdef", 5), "ab…");
         assert_eq!(cap("żżż", 4), "…");
-    }
-
-    #[test]
-    fn finds_skill_in_paths() {
-        assert_eq!(
-            skill_from_path("cat /home/u/.codex/skills/pdf-tools/SKILL.md").as_deref(),
-            Some("pdf-tools")
-        );
-        assert_eq!(
-            skill_from_path(r#"{"command":["sed","-n","1,80p","./skills/x/SKILL.md"]}"#).as_deref(),
-            Some("x")
-        );
-        assert_eq!(skill_from_path("cat SKILL.md"), None);
-        assert_eq!(skill_from_path("cat /a/b/SKILL.mdx"), None);
     }
 }

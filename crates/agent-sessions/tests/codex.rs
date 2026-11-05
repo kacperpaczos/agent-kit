@@ -126,10 +126,12 @@ fn reads_response_items() {
 #[test]
 fn skill_activations_across_agents() {
     let (_dir, env) = common::home();
-    let (found, warnings) = skill_activations(&env, &Filter::default());
+    let out = skill_activations(&env, &Filter::default(), &Limits::default());
+    assert!(!out.truncated);
     // Broken lines in the fixtures surface as warnings.
-    assert_eq!(warnings.len(), 2, "{warnings:?}");
-    let names: Vec<(AgentKind, String, Certainty)> = found
+    assert_eq!(out.warnings.len(), 2, "{:?}", out.warnings);
+    let names: Vec<(AgentKind, String, Certainty)> = out
+        .found
         .iter()
         .map(|(info, e)| match &e.kind {
             EventKind::SkillActivation { name, certainty } => {
@@ -169,4 +171,113 @@ fn broken_session_meta_is_a_warning() {
     assert!(sessions.is_empty());
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].message.contains("session_meta"));
+}
+
+/// A rollout whose tool calls are given as `(name, arguments)` function
+/// calls.
+fn rollout_with(calls: &[(&str, String)]) -> (tempfile::TempDir, agent_sessions::FakeEnv) {
+    let dir = tempfile::tempdir().unwrap();
+    let day = dir.path().join(".codex/sessions/2026/02/01");
+    std::fs::create_dir_all(&day).unwrap();
+    let mut text = String::from(
+        r#"{"timestamp":"2026-02-01T09:00:00Z","type":"session_meta","payload":{"id":"t-1","timestamp":"2026-02-01T09:00:00Z","cwd":"/w","originator":"x","cli_version":"0","source":"cli"}}"#,
+    );
+    text.push('\n');
+    for (name, args) in calls {
+        let line = serde_json::json!({
+            "timestamp": "2026-02-01T09:00:01Z",
+            "type": "response_item",
+            "payload": {"type": "function_call", "name": name, "arguments": args, "call_id": "c"}
+        });
+        text.push_str(&line.to_string());
+        text.push('\n');
+    }
+    std::fs::write(day.join("rollout-2026-02-01T09-00-00-t-1.jsonl"), text).unwrap();
+    let env = agent_sessions::FakeEnv::with_home(dir.path());
+    (dir, env)
+}
+
+fn bash(script: &str) -> String {
+    serde_json::json!({"command": ["bash", "-lc", script]}).to_string()
+}
+
+fn inferred(env: &agent_sessions::FakeEnv, limits: &Limits) -> (Vec<String>, bool) {
+    let out = skill_activations(env, &codex_only(), limits);
+    let names = out
+        .found
+        .iter()
+        .map(|(_, e)| match &e.kind {
+            EventKind::SkillActivation { name, certainty } => {
+                assert_eq!(*certainty, Certainty::Inferred);
+                name.clone()
+            }
+            other => panic!("not an activation: {other:?}"),
+        })
+        .collect();
+    (names, out.truncated)
+}
+
+#[test]
+fn writes_and_deletes_are_not_activations() {
+    let (_dir, env) = rollout_with(&[
+        ("shell", bash("touch /s/a/SKILL.md")),
+        ("shell", bash("rm -rf /s/b/SKILL.md")),
+        ("shell", bash("mv /s/c/SKILL.md /tmp/old.md")),
+        ("shell", bash("cp /tmp/new.md /s/d/SKILL.md")),
+        ("shell", bash("printf 'x' > /s/e/SKILL.md")),
+        ("shell", bash("sed -i 's/a/b/' /s/f/SKILL.md")),
+        (
+            "exec_command",
+            r#"{"cmd":"echo /s/g/SKILL.md"}"#.to_string(),
+        ),
+        (
+            "write_file",
+            r#"{"path":"/s/h/SKILL.md","content":"x"}"#.to_string(),
+        ),
+    ]);
+    assert_eq!(inferred(&env, &Limits::default()), (vec![], false));
+}
+
+#[test]
+fn reads_of_several_skills_are_activations() {
+    let (_dir, env) = rollout_with(&[
+        (
+            "shell",
+            bash("cat /s/alpha/SKILL.md /s/beta/SKILL.md && head -n 20 skills/gamma/SKILL.md"),
+        ),
+        (
+            "exec_command",
+            r#"{"cmd":"rg -n name /s/delta/SKILL.md"}"#.to_string(),
+        ),
+        ("read_file", r#"{"path":"/s/epsilon/SKILL.md"}"#.to_string()),
+    ]);
+    assert_eq!(
+        inferred(&env, &Limits::default()).0,
+        ["alpha", "beta", "gamma", "delta", "epsilon"]
+    );
+}
+
+#[test]
+fn repeated_activations_are_bounded() {
+    let calls: Vec<(&str, String)> = (0..50)
+        .map(|_| ("shell", bash("cat /s/loop/SKILL.md")))
+        .collect();
+    let (_dir, env) = rollout_with(&calls);
+    let (names, truncated) = inferred(&env, &Limits::default());
+    assert_eq!(names.len(), 50);
+    assert!(!truncated);
+    let limits = Limits {
+        max_events: 7,
+        ..Limits::default()
+    };
+    let (names, truncated) = inferred(&env, &limits);
+    assert_eq!(names.len(), 7);
+    assert!(truncated);
+    let limits = Limits {
+        max_total: 4 * 10,
+        ..Limits::default()
+    };
+    let (names, truncated) = inferred(&env, &limits);
+    assert_eq!(names.len(), 10);
+    assert!(truncated);
 }

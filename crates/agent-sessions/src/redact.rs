@@ -43,12 +43,17 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         // Slack tokens.
         rule(r"\bxox[abposr]-[A-Za-z0-9-]{10,}", MASK),
         // key=value / key: value credentials, also as JSON keys; quotes
-        // around the value are kept.
+        // around the value are kept. A quoted value may contain escaped
+        // quotes and may be cut off (no closing quote): then everything to
+        // the end of the text is masked.
         rule(
-            &format!(r#"{CREDENTIAL_KEY}"([^"]*)""#),
+            &format!(r#"{CREDENTIAL_KEY}"(?:[^"\\]|\\.)*(?:"|\\?\z)"#),
             r#"${1}"[REDACTED]""#,
         ),
-        rule(&format!(r#"{CREDENTIAL_KEY}'([^']*)'"#), "${1}'[REDACTED]'"),
+        rule(
+            &format!(r#"{CREDENTIAL_KEY}'(?:[^'\\]|\\.)*(?:'|\\?\z)"#),
+            "${1}'[REDACTED]'",
+        ),
         rule(
             &format!(r#"{CREDENTIAL_KEY}[^\s&"',;}}]+"#),
             "${1}[REDACTED]",
@@ -66,4 +71,37 @@ pub fn redact(text: &str) -> String {
         }
     }
     out.into_owned()
+}
+
+/// Object keys whose values are credentials (`password`, `GITHUB_TOKEN`,
+/// `Authorization`, `api_key`…).
+static CREDENTIAL_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(?:^|[_-])(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|authorization|cookie)$",
+    )
+    .expect("valid regex")
+});
+
+/// [`redact`] applied to every string inside a JSON value, with values
+/// under credential-like keys replaced by [`MASK`]. Redacting the decoded
+/// strings avoids the escaped quotes of serialized JSON hiding a secret.
+pub fn redact_value(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => Value::String(redact(s)),
+        Value::Array(items) => Value::Array(items.iter().map(redact_value).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    let v = if CREDENTIAL_NAME.is_match(k) && !v.is_null() {
+                        Value::String(MASK.to_string())
+                    } else {
+                        redact_value(v)
+                    };
+                    (k.clone(), v)
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }

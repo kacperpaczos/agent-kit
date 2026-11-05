@@ -9,12 +9,15 @@
 //!   assistant message's content (`text` / `reasoning` / `tool`) in newer
 //!   releases; older ones keep it in the message's `data.content`.
 //!
-//! The database is opened read-only (`file:…?mode=ro`). An unknown layout
-//! is reported, never a panic.
+//! The database is opened read-only (`file:…?mode=ro`, busy timeout, never
+//! `immutable`). Oversized rows are skipped by their stored length before
+//! loading. An unknown layout or a locked database is reported, never a
+//! panic.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, params};
 use serde_json::Value;
 
@@ -85,35 +88,48 @@ pub(crate) fn read(db: &Path, session: &str, sink: &mut Sink<'_>) -> Result<()> 
     let conn = connect(db)?;
     let schema = schema(&conn, db)?;
     let db_err = |e: rusqlite::Error| database(db, e);
+    // `octet_length` comes from the record header, so an oversized value is
+    // never loaded: the CASE yields NULL for it instead.
     let mut stmt = conn
         .prepare(
-            "SELECT id, type, time_created, data FROM session_message \
-             WHERE session_id = ?1 ORDER BY seq",
+            "SELECT id, type, time_created, octet_length(data), \
+                    CASE WHEN octet_length(data) <= ?2 THEN data END \
+             FROM session_message WHERE session_id = ?1 ORDER BY seq",
         )
         .map_err(db_err)?;
     let mut parts = if schema.has_parts {
         Some(
-            conn.prepare("SELECT data FROM session_part WHERE message_id = ?1 ORDER BY ordinal")
-                .map_err(db_err)?,
+            conn.prepare(
+                "SELECT ordinal, octet_length(data), \
+                        CASE WHEN octet_length(data) <= ?2 THEN data END \
+                 FROM session_part WHERE message_id = ?1 ORDER BY ordinal",
+            )
+            .map_err(db_err)?,
         )
     } else {
         None
     };
-    let mut rows = stmt.query(params![session]).map_err(db_err)?;
+    let max = i64::try_from(sink.max_line()).unwrap_or(i64::MAX);
+    let mut rows = stmt.query(params![session, max]).map_err(db_err)?;
     while !sink.full() {
         let Some(row) = rows.next().map_err(db_err)? else {
             break;
         };
-        let id: String = row.get(0).map_err(db_err)?;
-        let kind: String = row.get(1).map_err(db_err)?;
+        let id = short_text(row, 0).map_err(db_err)?;
+        let kind = short_text(row, 1).map_err(db_err)?;
         let ts = row
             .get::<_, Option<i64>>(2)
             .map_err(db_err)?
             .and_then(from_millis);
-        let raw: String = row.get(3).map_err(db_err)?;
-        let data = match serde_json::from_str::<Value>(&raw) {
-            Ok(v) => v,
-            Err(e) => {
+        let data = match json_cell(row, 3, 4, sink.max_line()).map_err(db_err)? {
+            Cell::Json(v) => v,
+            Cell::TooLarge(len) => {
+                sink.warn(format!(
+                    "message {id}: {len} bytes, over the line limit, skipped"
+                ));
+                continue;
+            }
+            Cell::Broken(e) => {
                 sink.warn(format!("message {id}: broken JSON ({e})"));
                 continue;
             }
@@ -138,7 +154,7 @@ pub(crate) fn read(db: &Path, session: &str, sink: &mut Sink<'_>) -> Result<()> 
                 };
                 sink.push(ts, Role::User, kind);
                 if let Some(exit) = data.get("exit").and_then(Value::as_i64) {
-                    let summary = sink.text(&summarize(data.get("output").unwrap_or(&Value::Null)));
+                    let summary = sink.json(data.get("output").unwrap_or(&Value::Null));
                     sink.push(
                         ts,
                         Role::Tool,
@@ -161,12 +177,21 @@ pub(crate) fn read(db: &Path, session: &str, sink: &mut Sink<'_>) -> Result<()> 
                         }
                     }
                     (None, Some(parts)) => {
-                        let mut part_rows = parts.query(params![id]).map_err(db_err)?;
-                        while let Some(part) = part_rows.next().map_err(db_err)? {
-                            let raw: String = part.get(0).map_err(db_err)?;
-                            match serde_json::from_str::<Value>(&raw) {
-                                Ok(item) => content_events(sink, ts, &item),
-                                Err(e) => sink.warn(format!("part of {id}: broken JSON ({e})")),
+                        let mut part_rows = parts.query(params![id, max]).map_err(db_err)?;
+                        while !sink.full() {
+                            let Some(part) = part_rows.next().map_err(db_err)? else {
+                                break;
+                            };
+                            let ordinal = part.get::<_, Option<i64>>(0).map_err(db_err)?;
+                            let ordinal = ordinal.unwrap_or(-1);
+                            match json_cell(part, 1, 2, sink.max_line()).map_err(db_err)? {
+                                Cell::Json(item) => content_events(sink, ts, &item),
+                                Cell::TooLarge(len) => sink.warn(format!(
+                                    "part {ordinal} of {id}: {len} bytes, over the line limit, skipped"
+                                )),
+                                Cell::Broken(e) => sink.warn(format!(
+                                    "part {ordinal} of {id}: broken JSON ({e})"
+                                )),
                             }
                         }
                     }
@@ -197,7 +222,7 @@ fn content_events(sink: &mut Sink<'_>, ts: Option<std::time::SystemTime>, item: 
             } else {
                 let kind = EventKind::ToolUse {
                     name: sink.text(name),
-                    input_summary: sink.text(&summarize(input)),
+                    input_summary: sink.json(input),
                 };
                 sink.push(ts, Role::Assistant, kind);
             }
@@ -264,25 +289,67 @@ fn skill_event(sink: &mut Sink<'_>, ts: Option<std::time::SystemTime>, name: &st
     );
 }
 
-/// Open read-only; when that fails (e.g. a WAL database in a directory we
-/// cannot write the `-shm` file to) retry as immutable.
+/// How long a reader waits for a writer's lock before giving up.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Open with `mode=ro` and a busy timeout. A database that is locked,
+/// unreadable or not SQLite is an error (reported as a warning by
+/// listing); the reader never claims `immutable`, which would skip
+/// SQLite's locking on a database the agent may be writing.
 fn connect(db: &Path) -> Result<Connection> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let base = format!("file:{}?mode=ro", uri_path(db));
-    let mut last = None;
-    for uri in [base.clone(), format!("{base}&immutable=1")] {
-        match Connection::open_with_flags(&uri, flags).and_then(|conn| {
-            conn.busy_timeout(Duration::from_secs(2))?;
+    let uri = format!("file:{}?mode=ro", uri_path(db));
+    Connection::open_with_flags(&uri, flags)
+        .and_then(|conn| {
+            conn.busy_timeout(BUSY_TIMEOUT)?;
             conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
             Ok(conn)
-        }) {
-            Ok(conn) => return Ok(conn),
-            Err(e) => last = Some(e),
-        }
+        })
+        .map_err(|e| database(db, e))
+}
+
+enum Cell {
+    Json(Value),
+    TooLarge(i64),
+    Broken(String),
+}
+
+/// A JSON column fetched as `octet_length(col)` at `len_idx` and
+/// `CASE WHEN octet_length(col) <= max THEN col END` at `data_idx`; the
+/// borrowed value is parsed in place, never copied whole.
+fn json_cell(
+    row: &rusqlite::Row<'_>,
+    len_idx: usize,
+    data_idx: usize,
+    max: usize,
+) -> rusqlite::Result<Cell> {
+    let len = row.get::<_, Option<i64>>(len_idx)?.unwrap_or(0);
+    let bytes = match row.get_ref(data_idx)? {
+        ValueRef::Text(b) | ValueRef::Blob(b) => b,
+        ValueRef::Null if len > 0 => return Ok(Cell::TooLarge(len)),
+        _ => return Ok(Cell::Broken("not text".to_string())),
+    };
+    if bytes.len() > max {
+        return Ok(Cell::TooLarge(len));
     }
-    Err(database(db, last.expect("at least one attempt")))
+    Ok(match serde_json::from_slice::<Value>(bytes) {
+        Ok(v) => Cell::Json(v),
+        Err(e) => Cell::Broken(e.to_string()),
+    })
+}
+
+/// A short text column (ids, types), cut to 256 bytes without copying
+/// more than that.
+fn short_text(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String> {
+    Ok(match row.get_ref(idx)? {
+        ValueRef::Text(b) | ValueRef::Blob(b) => {
+            String::from_utf8_lossy(&b[..b.len().min(256)]).into_owned()
+        }
+        ValueRef::Integer(i) => i.to_string(),
+        _ => String::new(),
+    })
 }
 
 /// Percent-encode the characters that end or escape a URI path.
@@ -360,8 +427,16 @@ fn schema(conn: &Connection, db: &Path) -> Result<Schema> {
 }
 
 fn database(db: &Path, e: rusqlite::Error) -> Error {
+    let busy = matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    );
     Error::Database {
         path: db.to_path_buf(),
-        message: e.to_string(),
+        message: if busy {
+            format!("database busy/locked, try again later ({e})")
+        } else {
+            e.to_string()
+        },
     }
 }

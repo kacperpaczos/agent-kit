@@ -9,21 +9,19 @@
 //! skipped.
 //!
 //! Codex has no skill tool: a tool call that reads `…/<name>/SKILL.md`
-//! counts as an [`Certainty::Inferred`] activation.
+//! (see [`crate::infer`]) counts as a [`Certainty::Inferred`] activation.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-
-use regex::Regex;
 
 use serde_json::Value;
 
+use crate::infer::skills_read;
 use crate::lines::{self, Line};
 use crate::time::parse_rfc3339;
 use crate::{
     AgentKind, Certainty, EventKind, Filter, Result, Role, SessionInfo, Sink, Warning, mtime,
-    skill_from_path, summarize,
+    summarize,
 };
 
 const HEAD_LINES: usize = 8;
@@ -196,21 +194,26 @@ fn item_events(item: &Value, ts: Option<std::time::SystemTime>, sink: &mut Sink<
                 }
             }
         }
-        "function_call" => tool_call(sink, ts, str_of("name"), str_of("arguments")),
-        "custom_tool_call" => tool_call(sink, ts, str_of("name"), str_of("input")),
+        "function_call" => {
+            let args = str_of("arguments");
+            tool_call(sink, ts, str_of("name"), args, sink.json_or_text(args));
+        }
+        "custom_tool_call" => {
+            let input = str_of("input");
+            tool_call(sink, ts, str_of("name"), input, sink.text(input));
+        }
         "local_shell_call" => {
-            let command = item
-                .pointer("/action/command")
-                .map(|c| match c {
-                    Value::Array(parts) => parts
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    other => summarize(other),
-                })
-                .unwrap_or_default();
-            tool_call(sink, ts, "local_shell", &command);
+            let command = item.pointer("/action/command").unwrap_or(&Value::Null);
+            let shown = match command {
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                other => summarize(other),
+            };
+            let shown = sink.text(&shown);
+            tool_call(sink, ts, "local_shell", &command.to_string(), shown);
         }
         "function_call_output" | "custom_tool_call_output" | "local_shell_call_output" => {
             let raw = output_text(item.get("output"));
@@ -223,15 +226,21 @@ fn item_events(item: &Value, ts: Option<std::time::SystemTime>, sink: &mut Sink<
     }
 }
 
-fn tool_call(sink: &mut Sink<'_>, ts: Option<std::time::SystemTime>, name: &str, input: &str) {
+/// A tool use, plus an inferred activation for each skill whose
+/// `SKILL.md` the call reads (see [`crate::infer`]).
+fn tool_call(
+    sink: &mut Sink<'_>,
+    ts: Option<std::time::SystemTime>,
+    name: &str,
+    raw_input: &str,
+    input_summary: String,
+) {
     let kind = EventKind::ToolUse {
         name: sink.text(name),
-        input_summary: sink.text(input),
+        input_summary,
     };
     sink.push(ts, Role::Assistant, kind);
-    if reads_skill(name, input)
-        && let Some(skill) = skill_from_path(input)
-    {
+    for skill in skills_read(name, raw_input) {
         let name = sink.text(&skill);
         sink.push(
             ts,
@@ -242,14 +251,6 @@ fn tool_call(sink: &mut Sink<'_>, ts: Option<std::time::SystemTime>, name: &str,
             },
         );
     }
-}
-
-/// Edits of a SKILL.md (patches, shell redirects into it) are not
-/// activations.
-fn reads_skill(name: &str, input: &str) -> bool {
-    static WRITE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#">>?\s*['"]?[^\s'"]*SKILL\.md"#).expect("valid regex"));
-    name != "apply_patch" && !input.contains("*** Begin Patch") && !WRITE.is_match(input)
 }
 
 /// A `FunctionCallOutputPayload`: a string or an array of content items.

@@ -196,7 +196,7 @@ fn item_events(item: &Value, ts: Option<std::time::SystemTime>, role: Role, sink
             }
             let kind = EventKind::ToolUse {
                 name: sink.text(name),
-                input_summary: sink.text(&summarize(input)),
+                input_summary: sink.json(input),
             };
             sink.push(ts, Role::Assistant, kind);
         }

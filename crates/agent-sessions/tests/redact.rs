@@ -94,3 +94,40 @@ fn ordinary_text_is_untouched() {
         assert_eq!(redact(text), text);
     }
 }
+
+#[test]
+fn escaped_and_unterminated_quoted_values() {
+    assert_eq!(
+        redact(r#"password="ab\"cd" rest"#),
+        r#"password="[REDACTED]" rest"#
+    );
+    assert_eq!(redact(r#"token='a\'b' x"#), "token='[REDACTED]' x");
+    // Cut off before the closing quote: masked to the end.
+    assert_eq!(redact("secret=\"abcdef"), "secret=\"[REDACTED]\"");
+    assert_eq!(redact("secret='abcdef\\"), "secret='[REDACTED]'");
+}
+
+#[test]
+fn long_values_are_masked_whole() {
+    let secret = "q".repeat(9_000);
+    let out = redact(&format!("password=\"{secret}\" tail"));
+    assert_eq!(out, "password=\"[REDACTED]\" tail");
+    let out = redact(&format!("password=\"{secret}"));
+    assert!(!out.contains("qqqq"), "{}", &out[..out.len().min(80)]);
+}
+
+#[test]
+fn json_values_are_redacted_before_serializing() {
+    use agent_sessions::redact::redact_value;
+    let v = serde_json::json!({
+        "command": "curl -d \"password=hunter2\" https://x.invalid",
+        "env": {"GITHUB_TOKEN": "abc", "PATH": "/usr/bin"},
+        "headers": [{"Authorization": "Basic Zm9vOmJhcg=="}],
+        "n": 3
+    });
+    let out = redact_value(&v).to_string();
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(!out.contains("\"abc\""), "{out}");
+    assert!(!out.contains("Zm9vOmJhcg"), "{out}");
+    assert!(out.contains("/usr/bin") && out.contains("\"n\":3"), "{out}");
+}
