@@ -420,3 +420,43 @@ fn locked_database_is_a_warning_not_an_immutable_read() {
         .unwrap();
     assert_eq!(check, "ok");
 }
+
+#[test]
+fn oversized_ids_reject_the_row_instead_of_being_shortened() {
+    let (_dir, env, db) = env_with_db(true);
+    let conn = Connection::open(&db).unwrap();
+    let long_id = format!("msg_{}", "a".repeat(2_000));
+    // A message whose id is a prefix of the long one: a shortened id
+    // would pick up its parts.
+    let prefix: String = long_id.chars().take(256).collect();
+    let assistant = r#"{"agent":"a","model":{"id":"m","providerID":"p"},"content":[]}"#;
+    message(&conn, "ses_main", &long_id, 7, "assistant", assistant);
+    message(&conn, "ses_main", &prefix, 8, "assistant", assistant);
+    conn.execute(
+        "INSERT INTO session_part (message_id, session_id, ordinal, type, time_created, time_updated, data)
+         VALUES (?1, 'ses_main', 0, 'text', 0, 0, '{\"type\":\"text\",\"text\":\"from prefix\"}'),
+                (?2, 'ses_main', 0, 'text', 0, 0, '{\"type\":\"text\",\"text\":\"from long\"}')",
+        params![prefix, long_id],
+    )
+    .unwrap();
+    drop(conn);
+    let (sessions, _) = list_sessions(&env, &oc_only());
+    let t = read_events(&sessions[0], &Limits::default()).unwrap();
+    assert!(
+        t.warnings
+            .iter()
+            .any(|w| w.message.contains("longer than 1024 bytes")),
+        "{:?}",
+        t.warnings
+    );
+    let texts: Vec<_> = t
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Text(s) if s.starts_with("from ") => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    // The prefix message keeps exactly its own part; the long one is skipped.
+    assert_eq!(texts, ["from prefix"]);
+}

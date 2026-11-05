@@ -115,8 +115,23 @@ pub(crate) fn read(db: &Path, session: &str, sink: &mut Sink<'_>) -> Result<()> 
         let Some(row) = rows.next().map_err(db_err)? else {
             break;
         };
-        let id = short_text(row, 0).map_err(db_err)?;
-        let kind = short_text(row, 1).map_err(db_err)?;
+        // Ids are used as-is (part lookup), so an id that is too long or
+        // not UTF-8 rejects the row instead of being shortened.
+        let seq = sink_row_label(row);
+        let id = match exact_text(row, 0).map_err(db_err)? {
+            Ok(id) => id,
+            Err(why) => {
+                sink.warn(format!("message {seq}: id {why}, skipped"));
+                continue;
+            }
+        };
+        let kind = match exact_text(row, 1).map_err(db_err)? {
+            Ok(kind) => kind,
+            Err(why) => {
+                sink.warn(format!("message {id}: type {why}, skipped"));
+                continue;
+            }
+        };
         let ts = row
             .get::<_, Option<i64>>(2)
             .map_err(db_err)?
@@ -340,16 +355,34 @@ fn json_cell(
     })
 }
 
-/// A short text column (ids, types), cut to 256 bytes without copying
-/// more than that.
-fn short_text(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<String> {
+/// Longest id / type accepted from the database.
+const MAX_ID: usize = 1024;
+
+/// An id or type column, exactly as stored; `Err(reason)` when it is too
+/// long, not UTF-8 or missing. Never shortened.
+fn exact_text(
+    row: &rusqlite::Row<'_>,
+    idx: usize,
+) -> rusqlite::Result<std::result::Result<String, String>> {
     Ok(match row.get_ref(idx)? {
-        ValueRef::Text(b) | ValueRef::Blob(b) => {
-            String::from_utf8_lossy(&b[..b.len().min(256)]).into_owned()
+        ValueRef::Text(b) | ValueRef::Blob(b) if b.len() > MAX_ID => {
+            Err(format!("longer than {MAX_ID} bytes ({} bytes)", b.len()))
         }
-        ValueRef::Integer(i) => i.to_string(),
-        _ => String::new(),
+        ValueRef::Text(b) | ValueRef::Blob(b) => std::str::from_utf8(b)
+            .map(str::to_string)
+            .map_err(|_| "not UTF-8".to_string()),
+        ValueRef::Integer(i) => Ok(i.to_string()),
+        _ => Err("missing".to_string()),
     })
+}
+
+/// A label for a row whose id cannot be used: its position in the result.
+fn sink_row_label(row: &rusqlite::Row<'_>) -> String {
+    // `rowid` is not selected; the time column is a stable enough hint.
+    match row.get_ref(2) {
+        Ok(ValueRef::Integer(t)) => format!("at {t}"),
+        _ => "(unknown)".to_string(),
+    }
 }
 
 /// Percent-encode the characters that end or escape a URI path.

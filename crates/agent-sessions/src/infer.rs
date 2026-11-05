@@ -164,19 +164,201 @@ fn command_reads(cmd: &Command, paths: &mut Vec<String>) {
         return;
     }
     let args: Vec<&String> = words.collect();
+    paths.extend(reader_files(&program, &args));
+    paths.extend(cmd.inputs.iter().cloned());
+}
+
+/// How a reader's argv is laid out.
+struct Spec {
+    /// The first positional is a pattern / script, unless an option gave it.
+    pattern_first: bool,
+    /// Short options that supply the pattern (they take an operand).
+    pattern_short: &'static str,
+    /// Long options that supply the pattern (they take an operand).
+    pattern_long: &'static [&'static str],
+    /// Other short options taking an operand (`-n 5`, `-A3`).
+    short_operands: &'static str,
+    /// Other long options taking an operand when not written `--x=v`.
+    long_operands: &'static [&'static str],
+}
+
+fn spec(program: &str) -> Spec {
+    const NONE: &[&str] = &[];
+    let plain = |short: &'static str, long: &'static [&'static str]| Spec {
+        pattern_first: false,
+        pattern_short: "",
+        pattern_long: NONE,
+        short_operands: short,
+        long_operands: long,
+    };
+    match program {
+        "grep" | "egrep" | "fgrep" => Spec {
+            pattern_first: true,
+            pattern_short: "ef",
+            pattern_long: &["regexp", "file"],
+            short_operands: "ABCmdD",
+            long_operands: &[
+                "after-context",
+                "before-context",
+                "context",
+                "max-count",
+                "include",
+                "exclude",
+                "exclude-dir",
+                "exclude-from",
+                "label",
+                "devices",
+                "directories",
+                "binary-files",
+            ],
+        },
+        "rg" => Spec {
+            pattern_first: true,
+            pattern_short: "ef",
+            pattern_long: &["regexp", "file"],
+            short_operands: "ABCmgtTEjMrd",
+            long_operands: &[
+                "after-context",
+                "before-context",
+                "context",
+                "max-count",
+                "glob",
+                "iglob",
+                "type",
+                "type-not",
+                "type-add",
+                "encoding",
+                "threads",
+                "max-columns",
+                "max-depth",
+                "max-filesize",
+                "replace",
+                "sort",
+                "sortr",
+                "pre",
+                "pre-glob",
+                "ignore-file",
+                "path-separator",
+                "colors",
+                "context-separator",
+                "field-match-separator",
+                "field-context-separator",
+            ],
+        },
+        "sed" => Spec {
+            pattern_first: true,
+            pattern_short: "ef",
+            pattern_long: &["expression", "file"],
+            short_operands: "l",
+            long_operands: &["line-length"],
+        },
+        "awk" => Spec {
+            pattern_first: true,
+            pattern_short: "f",
+            pattern_long: &["file"],
+            short_operands: "vF",
+            long_operands: &["assign", "field-separator"],
+        },
+        "head" | "tail" => plain("ncs", &["lines", "bytes", "pid", "sleep-interval"]),
+        "less" | "more" => plain("bhjkoOpPtTxyz", &["log-file", "pattern", "tag", "tabs"]),
+        "bat" | "batcat" => plain(
+            "lHrm",
+            &[
+                "language",
+                "highlight-line",
+                "line-range",
+                "map-syntax",
+                "theme",
+                "style",
+                "tabs",
+                "wrap",
+                "terminal-width",
+                "pager",
+                "file-name",
+                "diff-context",
+            ],
+        ),
+        "nl" => plain("bdfhilnsvw", &[]),
+        _ => plain("", NONE),
+    }
+}
+
+/// The files a reader invocation reads, from its arguments.
+fn reader_files(program: &str, args: &[&String]) -> Vec<String> {
+    if program == "get-content" || program == "gc" {
+        return powershell_files(args);
+    }
     if program == "sed"
         && args
             .iter()
             .any(|a| a.starts_with("-i") || *a == "--in-place" || a.starts_with("--in-place="))
     {
-        return;
+        return Vec::new();
     }
-    for arg in args {
-        if !arg.starts_with('-') {
-            paths.push(arg.clone());
+    let spec = spec(program);
+    let mut pattern_given = false;
+    let mut positionals = Vec::new();
+    let mut it = args.iter();
+    let mut options_done = false;
+    while let Some(arg) = it.next() {
+        if options_done || !arg.starts_with('-') || arg.as_str() == "-" {
+            positionals.push(arg.to_string());
+            continue;
+        }
+        if arg.as_str() == "--" {
+            options_done = true;
+            continue;
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, attached) = match long.split_once('=') {
+                Some((n, _)) => (n, true),
+                None => (long, false),
+            };
+            let is_pattern = spec.pattern_long.contains(&name);
+            pattern_given |= is_pattern;
+            if !attached && (is_pattern || spec.long_operands.contains(&name)) {
+                it.next();
+            }
+            continue;
+        }
+        // A short cluster: `-n`, `-n5`, `-inA3`, `-e PATTERN`.
+        let cluster: Vec<char> = arg[1..].chars().collect();
+        for (i, c) in cluster.iter().enumerate() {
+            let is_pattern = spec.pattern_short.contains(*c);
+            if is_pattern || spec.short_operands.contains(*c) {
+                pattern_given |= is_pattern;
+                if i + 1 == cluster.len() {
+                    it.next();
+                }
+                break;
+            }
         }
     }
-    paths.extend(cmd.inputs.iter().cloned());
+    if spec.pattern_first && !pattern_given && !positionals.is_empty() {
+        positionals.remove(0);
+    }
+    positionals
+}
+
+/// `Get-Content [-Path] <file>… [-TotalCount N] …` (case-insensitive).
+fn powershell_files(args: &[&String]) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let Some(name) = arg.strip_prefix('-') else {
+            files.push(arg.to_string());
+            continue;
+        };
+        let name = name.to_ascii_lowercase();
+        if matches!(name.as_str(), "path" | "literalpath" | "lp") {
+            if let Some(file) = it.next() {
+                files.push(file.to_string());
+            }
+        } else if !matches!(name.as_str(), "raw" | "force" | "wait" | "asbytestream") {
+            it.next();
+        }
+    }
+    files
 }
 
 fn is_assignment(word: &str) -> bool {
@@ -376,6 +558,24 @@ mod tests {
             skills_read("read_file", r#"{"path":"/s/r/SKILL.md"}"#),
             ["r"]
         );
+        assert_eq!(shell("rg x /s/foo/SKILL.md"), ["foo"]);
+        assert_eq!(
+            shell("grep -n -A 3 -e '/s/no/SKILL.md' /s/yes/SKILL.md"),
+            ["yes"]
+        );
+        assert_eq!(shell("grep -inA3 name /s/g/SKILL.md"), ["g"]);
+        assert_eq!(
+            shell("head -n 5 /s/h/SKILL.md; tail -n5 /s/t/SKILL.md"),
+            ["h", "t"]
+        );
+        assert_eq!(shell("sed -e 1,20p -n /s/s/SKILL.md"), ["s"]);
+        assert_eq!(shell("awk 'NR<5' /s/k/SKILL.md"), ["k"]);
+        assert_eq!(shell("bat -l md /s/b/SKILL.md"), ["b"]);
+        assert_eq!(
+            shell("Get-Content -TotalCount 5 -Path /s/p/SKILL.md"),
+            ["p"]
+        );
+        assert_eq!(shell("cat -- /s/c/SKILL.md"), ["c"]);
     }
 
     #[test]
@@ -392,6 +592,12 @@ mod tests {
             "vim /s/a/SKILL.md",
             "echo /s/a/SKILL.md",
             "ls /s/a/SKILL.md",
+            "grep '/s/a/SKILL.md' /tmp/log",
+            "rg -F /s/a/SKILL.md /tmp",
+            "sed 's|/s/a/SKILL.md|x|' /tmp/file",
+            "awk '/s/a/SKILL.md' /tmp/file",
+            "head -n /s/a/SKILL.md",
+            "bat -l /s/a/SKILL.md",
         ] {
             assert!(shell(script).is_empty(), "{script}");
         }
