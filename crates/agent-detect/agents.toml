@@ -25,6 +25,10 @@ auto = ["--permission-mode", "acceptEdits"]
 ask = ["--permission-mode", "manual"]
 plan = ["--permission-mode", "plan"]
 
+# Per-folder "Do you trust this folder?" state (see trust.rs).
+[agent.trust]
+kind = "claude_json"
+
 [[agent]]
 id = "opencode"
 name = "OpenCode"
@@ -81,3 +85,6 @@ context = { kind = "config_flag", flag = "-c", key = "developer_instructions" }
 auto = ["-a", "never", "-s", "workspace-write"]
 ask = ["-a", "on-request", "-s", "workspace-write"]
 plan = ["-a", "on-request", "-s", "read-only"]
+
+[agent.trust]
+kind = "codex_toml"

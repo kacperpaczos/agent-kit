@@ -13,6 +13,8 @@ test-support = ["dep:tempfile"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+toml_edit = "0.25"
+serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 libc = "0.2"
 tempfile = { version = "3", optional = true }

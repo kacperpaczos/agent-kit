@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use agent_detect::registry::{AgentDef, ModelsDef, SessionsDef, builtin_agents, parse_agents};
 use agent_detect::terminal::{ApprovalMode, ContextDef, TerminalDef};
+use agent_detect::trust::{TrustDef, TrustKind};
 
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
@@ -47,6 +48,9 @@ fn claude_agent() -> AgentDef {
                 (ApprovalMode::Plan, strings(&["--permission-mode", "plan"])),
             ]),
         }),
+        trust: Some(TrustDef {
+            kind: TrustKind::ClaudeJson,
+        }),
     }
 }
 
@@ -83,6 +87,7 @@ fn opencode_agent() -> AgentDef {
                 (ApprovalMode::Ask, vec![]),
             ]),
         }),
+        trust: None,
     }
 }
 
@@ -126,6 +131,9 @@ fn codex_agent() -> AgentDef {
                 ),
             ]),
         }),
+        trust: Some(TrustDef {
+            kind: TrustKind::CodexToml,
+        }),
     }
 }
 
@@ -158,6 +166,7 @@ transport = "mine-transport"
     assert_eq!(agents[0].models, None);
     assert_eq!(agents[0].sessions, None);
     assert_eq!(agents[0].terminal, None);
+    assert_eq!(agents[0].trust, None);
 }
 
 #[test]
